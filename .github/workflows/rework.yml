@@ -150,6 +150,11 @@ jobs:
         if: steps.count.outputs.stop == 'false'
         run: npm install -g @earendil-works/pi-coding-agent
 
+      # Same stack-specific block as implement.yml, and for the same reason:
+      # an agent that cannot run the gates will try to install its way to them.
+      - uses: pnpm/action-setup@v4
+      - run: pnpm install --frozen-lockfile
+
       - name: Rework
         if: steps.count.outputs.stop == 'false'
         env:

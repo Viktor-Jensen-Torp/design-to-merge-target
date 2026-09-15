@@ -84,6 +84,52 @@ jobs:
       - name: Install Pi
         run: npm install -g @earendil-works/pi-coding-agent
 
+      # THE ONE STACK-SPECIFIC BLOCK. Change it with `ci.yml` when the project
+      # is not pnpm.
+      #
+      # Without it the agent has no node_modules, so it cannot run a single
+      # gate. On the first real run it discovered that, and then tried `npm
+      # install`, `yarn install` and `corepack prepare` in turn — trying to
+      # install its way out. `AGENTS.md`'s loudest rule is "do not change
+      # dependencies", and the environment had made obeying it impossible
+      # (`NOTES.md` section 23). An agent that cannot verify its own work will
+      # do whatever it takes to be able to.
+      - uses: pnpm/action-setup@v4
+      - run: pnpm install --frozen-lockfile
+      - name: Assert the toolchain is actually there
+        run: |
+          test -d node_modules || { echo "::error::no node_modules after install"; exit 1; }
+          pnpm exec tsc --version >/dev/null || { echo "::error::toolchain not runnable"; exit 1; }
+
+      # The agent is GIVEN the issue. It is not asked to find it.
+      #
+      # `.agents/implementer.md` used to say "run gh issue view". On the first
+      # real run the model read that file and did not do it, then spent 46 tool
+      # calls guessing — git log --grep "4", then "issue", then "slug", then a
+      # grep for TODO across node_modules. Nothing failed; it just never learned
+      # what to build (`NOTES.md` section 23).
+      #
+      # A step the agent may skip is not a gate. `rework.yml` already gathers
+      # its context this way; this is the same pattern, applied where it was
+      # missing.
+      - name: Gather the issue
+        env:
+          GH_TOKEN: ${{ steps.token.outputs.token }}
+          N: ${{ github.event.issue.number }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          gh issue view "$N" --repo "$REPO" --json title,body,comments --jq '
+            "# " + .title + "\n\n" + (.body // "")
+            + (if (.comments | length) > 0
+               then "\n\n## Comments on the issue\n\n"
+                    + ([.comments[] | "**" + .author.login + "** wrote:\n\n" + .body] | join("\n\n---\n\n"))
+               else "" end)
+          ' > "$RUNNER_TEMP/issue.md"
+          test -s "$RUNNER_TEMP/issue.md" \
+            || { echo "::error::issue #$N came back empty — refusing to run an agent with no brief"; exit 1; }
+          echo "issue brief: $(wc -c < "$RUNNER_TEMP/issue.md") bytes"
+
       - name: Work the issue
         env:
           GH_TOKEN: ${{ steps.token.outputs.token }}
@@ -92,6 +138,19 @@ jobs:
           REPO: ${{ github.repository }}
         run: |
           git switch -c "agent/issue-$N"
+
+          # Built in a file, so nothing in the issue body is re-parsed by the
+          # shell on its way to the model.
+          {
+            printf 'Implement issue #%s in %s, following .agents/implementer.md.\n\n' "$N" "$REPO"
+            printf 'The issue is reproduced below IN FULL. Do not go looking for it —\n'
+            printf 'you already have it. Its acceptance criteria are what you are judged on.\n\n'
+            printf -- '----- BEGIN ISSUE #%s -----\n' "$N"
+            cat "$RUNNER_TEMP/issue.md"
+            printf -- '\n----- END ISSUE #%s -----\n\n' "$N"
+            printf 'Write your plan to %s/plan.md before you write any code.\n' "$RUNNER_TEMP"
+            printf 'It becomes the pull request body.\n'
+          } > "$RUNNER_TEMP/prompt.md"
 
           # Two channels, doing two jobs (NOTES.md section 2):
           #
@@ -110,11 +169,18 @@ jobs:
           pi --mode json --approve \
              --skill .agents/implementer.md \
              --model "${{ vars.IMPLEMENT_MODEL }}" \
-             "Implement issue #$N in $REPO, following .agents/implementer.md.
-
-          Write your plan to $RUNNER_TEMP/plan.md before you write any code.
-          It becomes the pull request body." \
+             "$(cat "$RUNNER_TEMP/prompt.md")" \
              | tee "$RUNNER_TEMP/pi.jsonl"
+
+      # Cheap and local. review.yml escalates a dependency diff to a human, but
+      # that costs a whole round trip to say something knowable here.
+      - name: Assert the agent left the dependencies alone
+        run: |
+          if ! git diff --quiet HEAD -- package.json pnpm-lock.yaml; then
+            echo "::error::the agent changed package.json or pnpm-lock.yaml (ADR 0002)"
+            git --no-pager diff --stat HEAD -- package.json pnpm-lock.yaml
+            exit 1
+          fi
 
       # pi exits 0 when the task fails. Established by reading print-mode.ts and
       # main.ts, not documented anywhere, and not yet confirmed by a run —
