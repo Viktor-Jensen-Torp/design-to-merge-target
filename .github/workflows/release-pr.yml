@@ -1,0 +1,131 @@
+# Opens the release pull request, `develop` → `main`.
+#
+# It exists because of a deadlock found on the first real release: a pull
+# request's author can never approve it, `main` requires a CODEOWNERS approval,
+# and on a small team the person opening the release is the only person who
+# could approve it. The release then cannot merge at all.
+#
+# So a bot opens it. The human is the reviewer, which is what `0005` and `0011`
+# actually describe — you *decide* the release, you do not author it.
+#
+# The body is the review aid, not a changelog. Per `0011` the release reviews
+# the SEAMS: the files more than one issue touched, which is the one thing
+# per-pull-request review is blind to by construction.
+name: release-pr
+
+on:
+  workflow_dispatch:
+    inputs:
+      head:
+        description: "branch to release from"
+        default: develop
+      base:
+        description: "branch to release into"
+        default: main
+
+permissions:
+  contents: read
+
+jobs:
+  open:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - uses: actions/create-github-app-token@v2
+        id: token
+        with:
+          app-id: ${{ vars.RELEASER_APP_ID }}
+          private-key: ${{ secrets.RELEASER_APP_PRIVATE_KEY }}
+
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+          token: ${{ steps.token.outputs.token }}
+
+      - name: Describe the release, then open or update the pull request
+        env:
+          GH_TOKEN: ${{ steps.token.outputs.token }}
+          HEAD: ${{ inputs.head }}
+          BASE: ${{ inputs.base }}
+        run: |
+          set -euo pipefail
+          RANGE="origin/$BASE..origin/$HEAD"
+
+          if [ -z "$(git log --format=%H "$RANGE")" ]; then
+            echo "::notice::$HEAD is not ahead of $BASE — nothing to release"
+            exit 0
+          fi
+
+          # `closingIssuesReferences` is empty for a pull request that did not
+          # target the default branch, so the body is parsed (`NOTES.md` 19).
+          parse_closes() {
+            awk '/^[[:space:]]*```/{f=!f; next} !f' \
+            | grep -oiE '(close[sd]?|fix(e[sd])?|resolve[sd]?)[[:space:]]+#[0-9]+' \
+            | grep -oE '[0-9]+' | sort -un
+          }
+
+          # commit -> pull request, from the squash subjects. This is why the
+          # queue squashes into develop and releases are merge commits (`0011`).
+          PAIRS=$(mktemp)
+          git log --format=$'%H\t%s' "$RANGE" | while IFS=$'\t' read -r sha subj; do
+            n=$(sed -n 's/.*(#\([0-9][0-9]*\))[[:space:]]*$/\1/p' <<< "$subj")
+            [ -z "$n" ] && continue
+            git show --name-only --format= "$sha" | sed '/^$/d' | sed "s|^|$n |"
+          done > "$PAIRS"
+
+          PRS=$(awk '{print $1}' "$PAIRS" | sort -un)
+          if [ -z "$PRS" ]; then
+            echo "::notice::no (#n) subjects in $RANGE — nothing this workflow can describe"
+            exit 0
+          fi
+
+          # The seams: every file more than one pull request touched.
+          SEAMS=$(awk '{print $2"\t"$1}' "$PAIRS" | sort -u \
+                   | awk -F'\t' '{c[$1]++} END{for (f in c) if (c[f] > 1) print c[f]"\t"f}' \
+                   | sort -k1,1nr -k2,2)
+
+          BODY=$(mktemp)
+          {
+            printf 'Releasing `%s` into `%s`.\n\n' "$HEAD" "$BASE"
+            printf '## What is shipping\n\n'
+            for p in $PRS; do
+              title=$(gh pr view "$p" --json title -q .title 2>/dev/null || echo "(unknown)")
+              issues=$(gh pr view "$p" --json body -q .body 2>/dev/null | parse_closes | sed 's/^/#/' | tr '\n' ' ')
+              printf -- '- #%s %s%s\n' "$p" "$title" "${issues:+  — closes ${issues% }}"
+            done
+
+            printf '\n## Read these first: the seams\n\n'
+            if [ -n "$SEAMS" ]; then
+              printf 'Files more than one pull request touched. Per-pull-request review\n'
+              printf 'cannot see two changes that are each right and wrong together, so\n'
+              printf 'this is the part the release actually reviews (ADR 0011).\n\n'
+              printf '| pull requests | file |\n|---|---|\n'
+              printf '%s\n' "$SEAMS" | while IFS=$'\t' read -r c f; do
+                printf '| %s | `%s` |\n' "$c" "$f"
+              done
+            else
+              printf 'None — no file was touched by more than one pull request in this\n'
+              printf 'release. There is no seam to read.\n'
+            fi
+
+            printf '\n## Before approving\n\n'
+            printf -- '- [ ] Every pull request above was reviewed by the developer who owns its epic.\n'
+            printf -- '- [ ] The seams above read correctly as a whole, not just individually.\n'
+            printf -- '- [ ] Anything you disagree with is reverted, not held — `git revert <sha>`\n'
+            printf '      on `%s`. The release ships without it (ADR 0011).\n' "$HEAD"
+            printf '\n---\n\n'
+            printf 'Opened by the releaser app. A pull request author cannot approve their own\n'
+            printf 'pull request, so a human opening this could never merge it.\n'
+          } > "$BODY"
+
+          EXISTING=$(gh pr list --base "$BASE" --head "$HEAD" --state open --json number -q '.[0].number' || true)
+          if [ -n "$EXISTING" ] && [ "$EXISTING" != "null" ]; then
+            gh pr edit "$EXISTING" --body-file "$BODY"
+            echo "::notice::updated existing release pull request #$EXISTING"
+            gh pr view "$EXISTING" --json url -q .url
+          else
+            gh pr create --base "$BASE" --head "$HEAD" \
+              --title "Release: $HEAD → $BASE" --body-file "$BODY"
+          fi
