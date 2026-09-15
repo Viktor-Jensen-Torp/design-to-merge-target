@@ -225,8 +225,14 @@ jobs:
           # the role still holds `bash`, which writes files, and needs it to run
           # `gh` at all. This is hygiene, not a control. The control is that
           # this App has no merge rights.
+          # Refuse to run an agent with no role instructions. `--skill` used to
+          # fail silently here and two runs went out with none (`NOTES.md` 25).
+          test -s .agents/reviewer.md \
+            || { echo "::error::.agents/reviewer.md is missing or empty"; exit 1; }
+          echo "role instructions: $(wc -c < .agents/reviewer.md) bytes"
+
           pi --mode json --approve \
-             --skill .agents/reviewer.md \
+             --append-system-prompt "$(cat .agents/reviewer.md)" \
              --model "${{ vars.REVIEW_MODEL }}" \
              --exclude-tools edit,write \
              "Review pull request #$PR in $REPO, following .agents/reviewer.md.
@@ -341,8 +347,14 @@ jobs:
           PR: ${{ needs.triage.outputs.number }}
           REPO: ${{ github.repository }}
         run: |
+          # Refuse to run an agent with no role instructions. `--skill` used to
+          # fail silently here and two runs went out with none (`NOTES.md` 25).
+          test -s .agents/gatekeeper.md \
+            || { echo "::error::.agents/gatekeeper.md is missing or empty"; exit 1; }
+          echo "role instructions: $(wc -c < .agents/gatekeeper.md) bytes"
+
           pi --mode json --approve \
-             --skill .agents/gatekeeper.md \
+             --append-system-prompt "$(cat .agents/gatekeeper.md)" \
              --model "${{ vars.GATEKEEP_MODEL }}" \
              --exclude-tools edit,write \
              "Decide whether pull request #$PR in $REPO merges to develop,
