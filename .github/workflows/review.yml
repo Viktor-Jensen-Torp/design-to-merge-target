@@ -258,6 +258,55 @@ jobs:
           app-id: ${{ vars.GATEKEEPER_APP_ID }}
           private-key: ${{ secrets.GATEKEEPER_APP_PRIVATE_KEY }}
 
+      # ADR 0006 allows no third ending. This says what the endings ARE, once,
+      # and two things read it: the driver that will not let the agent stop
+      # without one, and the safety net that fires if it stopped anyway.
+      # Written here rather than in either consumer because a condition stated
+      # in two places is a condition that will eventually disagree with itself.
+      #
+      # QUEUED is the case this file used to miss. Under a merge queue
+      # `gh pr merge` does not merge — it enqueues, and the merge lands minutes
+      # later. On 2026-09-15 the gatekeeper enqueued #16 correctly, its next
+      # turn died on a provider 429, and this check called it a silent stop and
+      # labelled `needs:human` 32 seconds before the queue merged it
+      # (`NOTES.md` 29). A gatekeeper that has succeeded must not look like one
+      # that did nothing.
+      - name: Define what ending the run means
+        env:
+          GH_TOKEN: ${{ steps.token.outputs.token }}
+          PR: ${{ needs.triage.outputs.number }}
+          REPO: ${{ github.repository }}
+        run: |
+          cat > "$RUNNER_TEMP/gatekeeper-done.sh" <<'DONE'
+          set -u
+          OWNER=${REPO%%/*}; NAME=${REPO##*/}
+          J=$(gh pr view "$PR" --repo "$REPO" --json state,labels,autoMergeRequest)
+          STATE=$(jq -r '.state' <<< "$J")
+          LABELS=$(jq -r '[.labels[].name] | join(",")' <<< "$J")
+          AUTO=$(jq -r 'if .autoMergeRequest then "yes" else "no" end' <<< "$J")
+          # `isInMergeQueue` is GraphQL-only; `gh pr view` does not expose it.
+          Q='query($o:String!,$n:String!,$p:Int!){repository(owner:$o,name:$n){pullRequest(number:$p){isInMergeQueue}}}'
+          QUEUE=$(gh api graphql -f query="$Q" -F o="$OWNER" -F n="$NAME" -F p="$PR" \
+                    --jq '.data.repository.pullRequest.isInMergeQueue' 2>/dev/null || echo unknown)
+
+          case "$STATE" in MERGED|CLOSED) echo "Pull request #$PR is $STATE."; exit 0 ;; esac
+          [ "$QUEUE" = "true" ] && { echo "Pull request #$PR is in the merge queue."; exit 0; }
+          [ "$AUTO"  = "yes"  ] && { echo "Pull request #$PR is queued to merge (auto-merge enabled)."; exit 0; }
+          case ",$LABELS," in
+            *,needs:human,*|*,needs:rework,*) echo "Pull request #$PR is labelled: $LABELS"; exit 0 ;;
+          esac
+
+          echo "Pull request #$PR has no outcome."
+          echo "  state:        $STATE"
+          echo "  labels:       ${LABELS:-none}"
+          echo "  in queue:     $QUEUE"
+          echo "  auto-merge:   $AUTO"
+          echo "It is still open, it is not queued to merge, and it carries neither"
+          echo "needs:human nor needs:rework."
+          exit 1
+          DONE
+          chmod +x "$RUNNER_TEMP/gatekeeper-done.sh"
+
       # ADR 0009 — read the verdict and route on it deterministically. A model
       # is only worth spending when the reviewer actually wants this merged.
       # This also resets the strike count, which is what makes strikes
@@ -329,6 +378,7 @@ jobs:
           sparse-checkout: |
             .agents
             .pi
+            scripts/pi-driver.py
           sparse-checkout-cone-mode: false
 
       - uses: actions/setup-node@v4
@@ -351,17 +401,41 @@ jobs:
           # fail silently here and two runs went out with none (`NOTES.md` 25).
           test -s .agents/gatekeeper.md \
             || { echo "::error::.agents/gatekeeper.md is missing or empty"; exit 1; }
+          test -s .agents/nudge-gatekeeper.md \
+            || { echo "::error::.agents/nudge-gatekeeper.md is missing or empty"; exit 1; }
+          test -x scripts/pi-driver.py \
+            || { echo "::error::scripts/pi-driver.py missing from the sparse checkout"; exit 1; }
           echo "role instructions: $(wc -c < .agents/gatekeeper.md) bytes"
 
-          pi --mode json --approve \
-             --append-system-prompt "$(cat .agents/gatekeeper.md)" \
-             --model "${{ vars.GATEKEEP_MODEL }}" \
-             --exclude-tools edit,write \
-             "Decide whether pull request #$PR in $REPO merges to develop,
+          cat > "$RUNNER_TEMP/prompt.md" <<PROMPT
+          Decide whether pull request #$PR in $REPO merges to develop,
           following .agents/gatekeeper.md.
 
           That file holds when to merge, when to escalate, and the exact
-          commands that end the run either way. There is no third ending."
+          commands that end the run either way. There is no third ending.
+          PROMPT
+
+          # The driver, for the same reason the implementer has one: `pi` exits
+          # 0 when the task fails (`NOTES.md` 1). On 2026-09-15 this step's
+          # model died on three consecutive provider 429s and the step still
+          # reported success — the only reason anyone noticed was the safety net
+          # below. The driver makes that a red step, and gives the agent another
+          # turn before it gets there.
+          #
+          # The predicate is the SAME script the safety net runs, so "finished"
+          # means one thing in this job, not two.
+          python3 scripts/pi-driver.py \
+            --prompt-file "$RUNNER_TEMP/prompt.md" \
+            --nudge-file .agents/nudge-gatekeeper.md \
+            --done "bash $RUNNER_TEMP/gatekeeper-done.sh" \
+            --max-nudges 2 \
+            --idle-timeout 300 \
+            --timeout 900 \
+            --log "$RUNNER_TEMP/rpc.jsonl" \
+            -- pi --mode rpc --approve \
+                  --append-system-prompt "$(cat .agents/gatekeeper.md)" \
+                  --model "${{ vars.GATEKEEP_MODEL }}" \
+                  --exclude-tools edit,write
 
       # Silence is the one outcome not allowed. On the Hermes rig a reviewer
       # twice decided privately that a human should handle something and then
@@ -374,11 +448,12 @@ jobs:
           REPO: ${{ github.repository }}
           RUN: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
-          STATE=$(gh pr view "$PR" --repo "$REPO" --json state,labels \
-                    -q '.state + " " + ([.labels[].name] | join(","))')
-          case "$STATE" in
-            MERGED*|*needs:human*|*needs:rework*) exit 0 ;;
-          esac
+          # The same predicate the driver used. One definition of "has an
+          # outcome", and it counts a queued merge as one — see the step that
+          # writes it.
+          if bash "$RUNNER_TEMP/gatekeeper-done.sh"; then
+            exit 0
+          fi
 
           # GitHub may have refused the merge because develop moved under us
           # while this job was running. That is rework, not a human's problem.
