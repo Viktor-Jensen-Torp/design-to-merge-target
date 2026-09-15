@@ -1,0 +1,219 @@
+# The rework loop. One door back to the implementer — ADR 0009.
+#
+# Fires when a pull request is labelled `needs:rework`, whatever put it there:
+#   triage      — CI came back red
+#   the gatekeeper — the reviewer returned `rework`, or GitHub refused the merge
+#
+# The label is applied by an App token, so the event chains. A GITHUB_TOKEN
+# label would not trigger anything at all (NOTES.md section 6).
+#
+# Goes in the TARGET repo at .github/workflows/rework.yml.
+
+name: Rework
+
+on:
+  pull_request:
+    types: [labeled]
+
+# One rework at a time per pull request. Two concurrent runs would push over
+# each other on the same branch.
+#
+# KNOWN GAP (VERIFY.md S10): if a third trigger arrives, GitHub cancels the
+# pending run and `needs:rework` is left on the pull request with nothing
+# listening. A label is state; an event is not. The sweeper that closes this
+# is not built.
+concurrency:
+  group: rework-${{ github.event.pull_request.number }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  rework:
+    if: github.event.label.name == 'needs:rework'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - uses: actions/create-github-app-token@v2
+        id: token
+        with:
+          app-id: ${{ vars.IMPLEMENTER_APP_ID }}
+          private-key: ${{ secrets.IMPLEMENTER_APP_PRIVATE_KEY }}
+
+      # ADR 0009 — three CONSECUTIVE strikes, and a separate budget for lost
+      # races with develop. Labels are the only state that survives a run, and
+      # unlike the run log they are visible on the pull request.
+      - name: Count the strike
+        id: count
+        env:
+          GH_TOKEN: ${{ steps.token.outputs.token }}
+          PR: ${{ github.event.pull_request.number }}
+          REPO: ${{ github.repository }}
+        run: |
+          # One read for both. Two `gh pr view` calls where one will do is the
+          # cheapest kind of waste to avoid.
+          PRJSON=$(gh pr view "$PR" --repo "$REPO" --json labels,mergeable)
+          LABELS=$(jq -r '.labels[].name'  <<< "$PRJSON")
+          CONFLICTED=$(jq -r '.mergeable'  <<< "$PRJSON")
+
+          # Whose fault is it? A conflict is not the implementer getting it
+          # wrong, so it spends the conflict budget, never a strike.
+          if [ "$CONFLICTED" = "CONFLICTING" ]; then
+            KIND=conflict; LIMIT=3; TASK=resolve-conflict
+          else
+            KIND=strike;   LIMIT=3; TASK=unknown
+          fi
+
+          N=0
+          for i in 1 2 3 4 5; do
+            grep -qx "$KIND:$i" <<< "$LABELS" && N=$i
+          done
+          N=$((N + 1))
+
+          echo "kind=$KIND" >> "$GITHUB_OUTPUT"
+          echo "task=$TASK" >> "$GITHUB_OUTPUT"
+          echo "n=$N"       >> "$GITHUB_OUTPUT"
+
+          if [ "$N" -ge "$LIMIT" ]; then
+            gh pr edit "$PR" --repo "$REPO" \
+              --add-label needs:human --remove-label needs:rework
+            gh pr ready "$PR" --repo "$REPO"
+            gh pr comment "$PR" --repo "$REPO" --body \
+              "Third consecutive $KIND. A human owns this now (ADR 0009)."
+            echo "stop=true" >> "$GITHUB_OUTPUT"
+          else
+            gh pr edit "$PR" --repo "$REPO" --add-label "$KIND:$N"
+            echo "stop=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      # Work on the pull request's own branch, not develop.
+      - uses: actions/checkout@v5
+        if: steps.count.outputs.stop == 'false'
+        with:
+          ref: ${{ github.event.pull_request.head.ref }}
+          fetch-depth: 0
+          token: ${{ steps.token.outputs.token }}
+
+      - name: Arm the local gates
+        if: steps.count.outputs.stop == 'false'
+        run: |
+          git config core.hooksPath .githooks
+          test "$(git config core.hooksPath)" = ".githooks"
+
+      # Assemble what the implementer is given. ADR 0009: the named task matters
+      # as much as the counter — an agent told "try again" re-reads the issue and
+      # reimplements; one told "resolve this conflict, here are both sides" does
+      # the job in front of it.
+      - name: Gather the context
+        id: ctx
+        if: steps.count.outputs.stop == 'false'
+        env:
+          GH_TOKEN: ${{ steps.token.outputs.token }}
+          PR: ${{ github.event.pull_request.number }}
+          REPO: ${{ github.repository }}
+          TASK: ${{ steps.count.outputs.task }}
+        run: |
+          {
+            echo "## The pull request"
+            gh pr view "$PR" --repo "$REPO" --json title,body -q '.title + "\n\n" + .body'
+            echo
+            echo "## The review thread"
+            gh pr view "$PR" --repo "$REPO" --json comments \
+              -q '.comments[] | "— " + .author.login + ":\n" + .body'
+          } > "$RUNNER_TEMP/context.md"
+
+          if [ "$TASK" = "resolve-conflict" ]; then
+            git fetch origin develop
+            echo "task=Rebase this branch onto origin/develop and resolve the conflicts." \
+              >> "$GITHUB_OUTPUT"
+          else
+            # Not a conflict, so it is CI or the reviewer. The run log says which.
+            RUN=$(gh run list --repo "$REPO" --branch "${{ github.event.pull_request.head.ref }}" \
+                    --workflow CI --limit 1 --json conclusion,databaseId \
+                    --jq '.[0] | select(.conclusion=="failure") | .databaseId')
+            if [ -n "$RUN" ]; then
+              echo "## The failing CI job" >> "$RUNNER_TEMP/context.md"
+              gh run view "$RUN" --repo "$REPO" --log-failed >> "$RUNNER_TEMP/context.md" 2>/dev/null || true
+              echo "task=Make CI pass. The failing job log is in the context file." >> "$GITHUB_OUTPUT"
+            else
+              echo "task=Address the reviewer's findings in the review thread." >> "$GITHUB_OUTPUT"
+            fi
+          fi
+
+      - uses: actions/setup-node@v4
+        if: steps.count.outputs.stop == 'false'
+        with:
+          node-version: 22
+      - name: Install Pi
+        if: steps.count.outputs.stop == 'false'
+        run: npm install -g @earendil-works/pi-coding-agent
+
+      - name: Rework
+        if: steps.count.outputs.stop == 'false'
+        env:
+          GH_TOKEN: ${{ steps.token.outputs.token }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          PR: ${{ github.event.pull_request.number }}
+          REPO: ${{ github.repository }}
+        run: |
+          # Same role, same skill file. Only the task differs — this is not a
+          # second implementer with its own instructions to drift from the first.
+          pi --mode json --approve \
+             --skill .agents/implementer.md \
+             --model "${{ vars.IMPLEMENT_MODEL }}" \
+             "You are reworking pull request #$PR in $REPO, following
+          .agents/implementer.md.
+
+          ${{ steps.ctx.outputs.task }}
+
+          Everything you need — the plan, the review thread, and any failing job
+          log — is in $RUNNER_TEMP/context.md. Read it first.
+
+          Commit your work. Do not push; the workflow does that. If the plan in
+          the pull request body is now wrong, say so in your final message." \
+             | tee "$RUNNER_TEMP/pi.jsonl"
+
+      # pi exits 0 on a failed task (NOTES.md section 1). Assert on the repo.
+      - name: Assert something changed
+        if: steps.count.outputs.stop == 'false'
+        run: |
+          if git diff --quiet "origin/${{ github.event.pull_request.head.ref }}"..HEAD; then
+            echo "No new commits — the rework produced nothing."
+            exit 1
+          fi
+
+      - name: Publish
+        if: steps.count.outputs.stop == 'false'
+        env:
+          GH_TOKEN: ${{ steps.token.outputs.token }}
+          PR: ${{ github.event.pull_request.number }}
+          REPO: ${{ github.repository }}
+          BRANCH: ${{ github.event.pull_request.head.ref }}
+        run: |
+          git push --force-with-lease origin "HEAD:$BRANCH"
+
+          # A commit is not delivered until it is on the remote.
+          LOCAL=$(git rev-parse HEAD)
+          REMOTE=$(git ls-remote origin "$BRANCH" | cut -f1)
+          test "$LOCAL" = "$REMOTE" || { echo "push did not land"; exit 1; }
+
+          # The label comes off only once the work is actually on the remote.
+          # Removing it earlier would lose the pull request if this step failed.
+          gh pr edit "$PR" --repo "$REPO" --remove-label needs:rework
+          gh pr comment "$PR" --repo "$REPO" \
+            --body "Reworked: ${{ steps.ctx.outputs.task }}
+          Now at \`$LOCAL\`. CI and review will run again."
+
+      - name: Escalate
+        if: failure() && steps.count.outputs.stop == 'false'
+        env:
+          GH_TOKEN: ${{ steps.token.outputs.token }}
+          PR: ${{ github.event.pull_request.number }}
+          REPO: ${{ github.repository }}
+          RUN: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          gh pr edit "$PR" --repo "$REPO" --add-label needs:human --remove-label needs:rework
+          gh pr ready "$PR" --repo "$REPO"
+          gh pr comment "$PR" --repo "$REPO" --body "The rework run itself failed. $RUN"

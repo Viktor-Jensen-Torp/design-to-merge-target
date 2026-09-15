@@ -1,0 +1,23 @@
+#!/usr/bin/env bash
+# Runs before every commit, for agents and people alike.
+#
+# The fast gates only. Anything slower than a few seconds belongs in pre-push
+# or CI — a hook that people learn to skip is worse than no hook.
+#
+# Armed with:  git config core.hooksPath .githooks
+set -euo pipefail
+
+fail() { printf '\n\033[31m✗ %s\033[0m\n' "$1"; exit 1; }
+
+command -v pnpm >/dev/null || fail "pnpm not found. Run: corepack enable"
+
+echo "→ lint"
+pnpm lint          || fail "Lint failed. Fix it — do not widen the rule."
+
+echo "→ format"
+pnpm format:check  || fail "Formatting. Run: pnpm format"
+
+echo "→ typecheck"
+pnpm typecheck     || fail "Types. Do not silence this with @ts-expect-error."
+
+printf '\033[32m✓ pre-commit\033[0m\n'

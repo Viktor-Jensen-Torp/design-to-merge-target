@@ -1,0 +1,382 @@
+# The review and gatekeep jobs.
+#
+# ADR 0004 shapes the trigger entirely: CI green is a precondition for review,
+# not a finding of it. workflow_run gives that for free — this cannot start
+# before CI finishes, and the conclusion is in the event.
+#
+# ADR 0006 shapes the jobs: the reviewer returns a verdict and holds no
+# authority; a separate gatekeeper merges or escalates. Two jobs rather than two
+# workflows, deliberately — each still gets its own App, model and skill file,
+# but there is no second trigger to misfire and no extra link in a workflow_run
+# chain (which caps at three levels, NOTES.md section 7).
+#
+# Goes in the TARGET repo at .github/workflows/review.yml.
+#
+# Requires, in the target repo:
+#   vars.REVIEWER_APP_ID    secrets.REVIEWER_APP_PRIVATE_KEY
+#   vars.GATEKEEPER_APP_ID  secrets.GATEKEEPER_APP_PRIVATE_KEY
+#   secrets.OPENROUTER_API_KEY
+#   vars.REVIEW_MODEL              vars.GATEKEEP_MODEL
+
+name: Review
+
+on:
+  workflow_run:
+    workflows: ["CI"]            # must match the `name:` of the test workflow
+    types: [completed]
+
+permissions:
+  contents: read
+
+jobs:
+  # ── Find the pull request, and turn a red build back without spending a token
+  triage:
+    # CI also runs on `push` to develop, where there is no pull request to find.
+    # Without this the job goes red on every merge (NOTES.md section 18).
+    if: github.event.workflow_run.event != 'push'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      number: ${{ steps.pr.outputs.number }}
+      green: ${{ steps.pr.outputs.green }}
+      blocked: ${{ steps.conflict.outputs.blocked }}
+      risky: ${{ steps.risk.outputs.risky }}
+      reasons: ${{ steps.risk.outputs.reasons }}
+    steps:
+      - uses: actions/create-github-app-token@v2
+        id: token
+        with:
+          app-id: ${{ vars.REVIEWER_APP_ID }}
+          private-key: ${{ secrets.REVIEWER_APP_PRIVATE_KEY }}
+
+      # A merge-group CI run that FAILED means the queue ejected this pull
+      # request: it passed alone but not against the entries ahead of it. That
+      # is the semantic conflict ADR 0010 adopted the queue to catch, and it is
+      # the fourth door into the rework loop (ADR 0009).
+      #
+      # The head SHA of a merge group belongs to a temporary branch, so the
+      # normal lookup below finds nothing. The pull request number has to come
+      # out of the branch name instead.
+      #
+      # UNVERIFIED: GitHub documents the prefix `gh-readonly-queue/{base}` but
+      # not the rest of the format. The `pr-<n>` segment is assumed. Confirm it
+      # on the first queued run and record it in NOTES.md — if it is wrong, this
+      # step silently does nothing, which is the failure shape this repo exists
+      # to avoid.
+      - name: Ejected from the merge queue
+        id: ejected
+        if: startsWith(github.event.workflow_run.head_branch, 'gh-readonly-queue/')
+        env:
+          GH_TOKEN: ${{ steps.token.outputs.token }}
+          REPO: ${{ github.repository }}
+          BRANCH: ${{ github.event.workflow_run.head_branch }}
+          RUN: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.event.workflow_run.id }}
+        run: |
+          if [ "${{ github.event.workflow_run.conclusion }}" = "success" ]; then
+            echo "The queue is green; it will merge on its own."
+            exit 0
+          fi
+          NUM=$(sed -n 's/.*pr-\([0-9][0-9]*\).*/\1/p' <<< "$BRANCH")
+          if [ -z "$NUM" ]; then
+            echo "::warning::Could not read a pull request number out of '$BRANCH'."
+            echo "The merge-group branch format is not what this workflow assumes."
+            exit 0
+          fi
+          gh pr comment "$NUM" --repo "$REPO" --body "Ejected from the merge queue: this change passes on its own but not alongside the entries ahead of it. Back to the implementer (ADR 0010). $RUN"
+          gh pr edit "$NUM" --repo "$REPO" --add-label needs:rework
+
+      # workflow_run's `pull_requests` payload is documented as NOT necessarily
+      # indicating the PR that triggered the run, so it is not used here.
+      - name: Find the pull request
+        id: pr
+        if: "!startsWith(github.event.workflow_run.head_branch, 'gh-readonly-queue/')"
+        env:
+          GH_TOKEN: ${{ steps.token.outputs.token }}
+          SHA: ${{ github.event.workflow_run.head_sha }}
+          REPO: ${{ github.repository }}
+        run: |
+          NUM=$(gh pr list --repo "$REPO" --search "$SHA" --state open \
+                  --json number,labels \
+                  --jq '.[] | select(.labels[].name == "agent") | .number' | head -1)
+          if [ -z "$NUM" ]; then
+            echo "No agent pull request for $SHA — nothing to do."
+            echo "number=" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "number=$NUM" >> "$GITHUB_OUTPUT"
+          if [ "${{ github.event.workflow_run.conclusion }}" = "success" ]; then
+            echo "green=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "green=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      # ADR 0009 — we never detect conflicts ourselves except here, cheaply,
+      # to avoid paying for a review of a diff that is about to change anyway.
+      # The authoritative refusal still comes from GitHub at the merge attempt.
+      - name: A conflicted pull request is reworked, not reviewed
+        id: conflict
+        if: steps.pr.outputs.number != ''
+        env:
+          GH_TOKEN: ${{ steps.token.outputs.token }}
+          PR: ${{ steps.pr.outputs.number }}
+          REPO: ${{ github.repository }}
+        run: |
+          M=$(gh pr view "$PR" --repo "$REPO" --json mergeable -q '.mergeable')
+          if [ "$M" = "CONFLICTING" ]; then
+            gh pr comment "$PR" --repo "$REPO" \
+              --body "Conflicts with develop. Back to the implementer before review (ADR 0009)."
+            gh pr edit "$PR" --repo "$REPO" --add-label needs:rework
+            echo "blocked=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "blocked=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Red build goes back
+        if: steps.pr.outputs.number != '' && steps.pr.outputs.green != 'true'
+        env:
+          GH_TOKEN: ${{ steps.token.outputs.token }}
+          PR: ${{ steps.pr.outputs.number }}
+          REPO: ${{ github.repository }}
+        run: |
+          gh pr comment "$PR" --repo "$REPO" \
+            --body "CI is red. Back to the implementer without review (ADR 0004)."
+          gh pr edit "$PR" --repo "$REPO" --add-label needs:rework
+
+      # ADR 0006: most of the escalation list is authority, not correctness, and
+      # authority is a grep over changed paths. Run it deterministically so the
+      # cheap, reliable escalations never depend on a model noticing.
+      - name: Deterministic risk check
+        id: risk
+        if: steps.pr.outputs.number != '' && steps.pr.outputs.green == 'true'
+        env:
+          GH_TOKEN: ${{ steps.token.outputs.token }}
+          PR: ${{ steps.pr.outputs.number }}
+          REPO: ${{ github.repository }}
+        run: |
+          FILES=$(gh pr diff "$PR" --repo "$REPO" --name-only)
+          REASONS=""
+          grep -qE '^\.github/'                      <<< "$FILES" && REASONS="$REASONS- touches .github/ (root of trust)\n"
+          grep -qE '(^|/)CODEOWNERS$'                <<< "$FILES" && REASONS="$REASONS- touches CODEOWNERS\n"
+          grep -qE '(^|/)AGENTS\.md$'                <<< "$FILES" && REASONS="$REASONS- touches AGENTS.md\n"
+          grep -qE '(^|/)\.agents/'                  <<< "$FILES" && REASONS="$REASONS- touches agent role instructions\n"
+          grep -qE '(^|/)\.githooks/'                <<< "$FILES" && REASONS="$REASONS- touches the local gates\n"
+          grep -qE '(^|/)(package\.json|pnpm-lock\.yaml)$' <<< "$FILES" && REASONS="$REASONS- changes dependencies (ADR 0002)\n"
+          if [ -n "$REASONS" ]; then
+            echo "risky=true" >> "$GITHUB_OUTPUT"
+            { echo "reasons<<EOF"; printf "%b" "$REASONS"; echo "EOF"; } >> "$GITHUB_OUTPUT"
+          else
+            echo "risky=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  # ── The verdict. No authority: this token cannot merge, and this job's only
+  #    side effect is a comment.
+  review:
+    needs: triage
+    if: needs.triage.outputs.number != '' && needs.triage.outputs.green == 'true'
+        && needs.triage.outputs.blocked != 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/create-github-app-token@v2
+        id: token
+        with:
+          app-id: ${{ vars.REVIEWER_APP_ID }}
+          private-key: ${{ secrets.REVIEWER_APP_PRIVATE_KEY }}
+          permission-pull-requests: write
+          permission-contents: read
+
+      # Role instructions and shared Pi config only — never the source code.
+      # ADR 0004 forbids this role reading a local worktree, and a sparse
+      # checkout of these two paths keeps that intact while making --skill
+      # resolvable. It also comes from the DEFAULT BRANCH in a workflow_run job,
+      # which is the property we want: a pull request cannot rewrite the
+      # instructions of the role that judges it.
+      - uses: actions/checkout@v5
+        with:
+          sparse-checkout: |
+            .agents
+            .pi
+          sparse-checkout-cone-mode: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Install Pi
+        run: npm install -g @earendil-works/pi-coding-agent
+
+      - name: Review the pull request
+        env:
+          GH_TOKEN: ${{ steps.token.outputs.token }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          PR: ${{ needs.triage.outputs.number }}
+          REPO: ${{ github.repository }}
+        run: |
+          # No checkout above, for two independent reasons.
+          #
+          # ADR 0004: on the Hermes run the reviewer read its own worktree and
+          # approved code that was not on the remote — the board, the worktree
+          # and the agent's own account all agreed while being wrong.
+          #
+          # And mechanically: in a workflow_run job, GITHUB_SHA and GITHUB_REF
+          # point at the DEFAULT BRANCH, not the triggering run, so a bare
+          # actions/checkout would fetch the wrong code (NOTES.md section 7).
+          #
+          # --exclude-tools drops file editing. Note plainly what that is worth:
+          # the role still holds `bash`, which writes files, and needs it to run
+          # `gh` at all. This is hygiene, not a control. The control is that
+          # this App has no merge rights.
+          pi --mode json --approve \
+             --skill .agents/reviewer.md \
+             --model "${{ vars.REVIEW_MODEL }}" \
+             --exclude-tools edit,write \
+             "Review pull request #$PR in $REPO, following .agents/reviewer.md.
+
+          That file holds the passes to run, what counts as Important rather
+          than a nit, the nit cap, what not to report, and the exact shape of
+          the verdict. Follow it rather than improvising a format."
+
+  # ── The authority. Serial, so two merges never race.
+  gatekeep:
+    needs: [triage, review]
+    if: needs.triage.outputs.number != '' && needs.triage.outputs.green == 'true'
+        && needs.triage.outputs.blocked != 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    # No `concurrency: merge` here. ADR 0010 — `develop` requires a merge queue,
+    # so GitHub serialises. `gh pr merge` enqueues rather than merging, and the
+    # queue builds each entry against the base plus everything ahead of it.
+    steps:
+      - uses: actions/create-github-app-token@v2
+        id: token
+        with:
+          app-id: ${{ vars.GATEKEEPER_APP_ID }}
+          private-key: ${{ secrets.GATEKEEPER_APP_PRIVATE_KEY }}
+
+      # ADR 0009 — read the verdict and route on it deterministically. A model
+      # is only worth spending when the reviewer actually wants this merged.
+      # This also resets the strike count, which is what makes strikes
+      # CONSECUTIVE rather than lifetime.
+      - name: Route on the verdict
+        id: verdict
+        if: needs.triage.outputs.risky != 'true'
+        env:
+          GH_TOKEN: ${{ steps.token.outputs.token }}
+          PR: ${{ needs.triage.outputs.number }}
+          REPO: ${{ github.repository }}
+        run: |
+          # One read, reused below. Every `gh pr view` is a round trip.
+          PRJSON=$(gh pr view "$PR" --repo "$REPO" --json comments,labels)
+          V=$(jq -r '[.comments[].body | select(startswith("VERDICT:"))] | last // ""' \
+                <<< "$PRJSON" | head -1 | cut -d' ' -f2)
+
+          case "$V" in
+            merge)
+              # The work is good, so the consecutive strike count resets.
+              #
+              # Read the labels once and remove only the ones actually present,
+              # in a single call. The obvious version — five blind removes in a
+              # loop — costs five API writes to do the work of nought or one,
+              # and four of them 422. That matters: the secondary rate limit is
+              # 80 content-generating requests a minute, 500 an hour, and it is
+              # shared across every job in the repository.
+              REMOVE=$(jq -r '[.labels[].name | select(startswith("strike:"))] | join(",")' \
+                         <<< "$PRJSON")
+              [ -n "$REMOVE" ] && gh pr edit "$PR" --repo "$REPO" --remove-label "$REMOVE"
+              echo "go=true" >> "$GITHUB_OUTPUT" ;;
+            rework)
+              gh pr edit "$PR" --repo "$REPO" --add-label needs:rework
+              echo "go=false" >> "$GITHUB_OUTPUT" ;;
+            unsure|"")
+              gh pr edit "$PR" --repo "$REPO" --add-label needs:human
+              gh pr ready "$PR" --repo "$REPO"
+              gh pr comment "$PR" --repo "$REPO" --body \
+                "The reviewer was unsure, or left no parsable verdict. A human should look (ADR 0006)."
+              echo "go=false" >> "$GITHUB_OUTPUT" ;;
+          esac
+
+      # The deterministic half of ADR 0006's escalation list. No model involved,
+      # and no tokens spent on a change that was never mergeable by an agent.
+      - name: Escalate on authority, without a model
+        if: needs.triage.outputs.risky == 'true'
+        env:
+          GH_TOKEN: ${{ steps.token.outputs.token }}
+          PR: ${{ needs.triage.outputs.number }}
+          REPO: ${{ github.repository }}
+          REASONS: ${{ needs.triage.outputs.reasons }}
+        run: |
+          gh pr edit "$PR" --repo "$REPO" --add-label needs:human
+          gh pr ready "$PR" --repo "$REPO"
+          printf '%s\n\n%s\n' \
+            "Escalated without review — this diff carries authority an agent may not self-approve (ADR 0006)." \
+            "$REASONS" > "$RUNNER_TEMP/body.md"
+          gh pr comment "$PR" --repo "$REPO" --body-file "$RUNNER_TEMP/body.md"
+
+      # Role instructions and shared Pi config only — never the source code.
+      # ADR 0004 forbids this role reading a local worktree, and a sparse
+      # checkout of these two paths keeps that intact while making --skill
+      # resolvable. It also comes from the DEFAULT BRANCH in a workflow_run job,
+      # which is the property we want: a pull request cannot rewrite the
+      # instructions of the role that judges it.
+      - uses: actions/checkout@v5
+        if: steps.verdict.outputs.go == 'true'
+        with:
+          sparse-checkout: |
+            .agents
+            .pi
+          sparse-checkout-cone-mode: false
+
+      - uses: actions/setup-node@v4
+        if: steps.verdict.outputs.go == 'true'
+        with:
+          node-version: 22
+      - name: Install Pi
+        if: steps.verdict.outputs.go == 'true'
+        run: npm install -g @earendil-works/pi-coding-agent
+
+      - name: Merge or escalate
+        if: steps.verdict.outputs.go == 'true'
+        env:
+          GH_TOKEN: ${{ steps.token.outputs.token }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          PR: ${{ needs.triage.outputs.number }}
+          REPO: ${{ github.repository }}
+        run: |
+          pi --mode json --approve \
+             --skill .agents/gatekeeper.md \
+             --model "${{ vars.GATEKEEP_MODEL }}" \
+             --exclude-tools edit,write \
+             "Decide whether pull request #$PR in $REPO merges to develop,
+          following .agents/gatekeeper.md.
+
+          That file holds when to merge, when to escalate, and the exact
+          commands that end the run either way. There is no third ending."
+
+      # Silence is the one outcome not allowed. On the Hermes rig a reviewer
+      # twice decided privately that a human should handle something and then
+      # stopped, which from GitHub is indistinguishable from a clean merge.
+      - name: No silent outcomes
+        if: always() && needs.triage.outputs.number != ''
+        env:
+          GH_TOKEN: ${{ steps.token.outputs.token }}
+          PR: ${{ needs.triage.outputs.number }}
+          REPO: ${{ github.repository }}
+          RUN: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          STATE=$(gh pr view "$PR" --repo "$REPO" --json state,labels \
+                    -q '.state + " " + ([.labels[].name] | join(","))')
+          case "$STATE" in
+            MERGED*|*needs:human*|*needs:rework*) exit 0 ;;
+          esac
+
+          # GitHub may have refused the merge because develop moved under us
+          # while this job was running. That is rework, not a human's problem.
+          if [ "$(gh pr view "$PR" --repo "$REPO" --json mergeable -q '.mergeable')" = "CONFLICTING" ]; then
+            gh pr edit "$PR" --repo "$REPO" --add-label needs:rework
+            gh pr comment "$PR" --repo "$REPO" \
+              --body "GitHub refused the merge: conflicts with develop. Back to the implementer (ADR 0009)."
+            exit 0
+          fi
+
+          gh pr edit "$PR" --repo "$REPO" --add-label needs:human
+          gh pr comment "$PR" --repo "$REPO" \
+            --body "The gatekeeper ended without merging or escalating. A human should look. $RUN"

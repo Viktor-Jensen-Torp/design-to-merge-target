@@ -1,0 +1,194 @@
+# The implementer. Label an issue, get a draft pull request.
+#
+# Goes in the TARGET repo at .github/workflows/implement.yml.
+#
+# Requires, in the target repo:
+#   vars.IMPLEMENTER_APP_ID    the implementer GitHub App's numeric App ID
+#   secrets.IMPLEMENTER_APP_PRIVATE_KEY   its private key, whole file
+#   secrets.OPENROUTER_API_KEY
+#   vars.IMPLEMENT_MODEL
+
+name: Implement
+
+on:
+  issues:
+    types: [labeled]
+
+# A single shared group would DROP work: at most one run executes and one pends,
+# and each new arrival cancels the pending one. Five labelled issues would give
+# two runs and three silent cancellations. See NOTES.md section 5.
+#
+# One group per issue. Implementation is parallel by design (PRD, "Parallel
+# implement, serial merge"); merging is serialised in review.yml instead.
+concurrency:
+  group: implement-${{ github.event.issue.number }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  implement:
+    if: github.event.label.name == 'ready-to-develop'
+    runs-on: ubuntu-latest
+    # An App installation token expires after one hour (NOTES.md section 9).
+    # Do not raise this past ~55 without re-minting the token mid-job.
+    timeout-minutes: 45
+
+    steps:
+      # A GITHUB_TOKEN-opened pull request produces CI runs in an
+      # approval-required state, so review.yml would never fire — silently.
+      # GITHUB_TOKEN-authored events also do not chain at all. NOTES.md 6.
+      - name: Mint the implementer token
+        id: token
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ vars.IMPLEMENTER_APP_ID }}
+          private-key: ${{ secrets.IMPLEMENTER_APP_PRIVATE_KEY }}
+
+      - uses: actions/checkout@v5
+        with:
+          ref: develop
+          fetch-depth: 0
+          token: ${{ steps.token.outputs.token }}
+
+      # ADR 0002 — dependency changes are human work. Refuse before spending a
+      # token rather than after reading a diff.
+      - name: Refuse dependency work
+        env:
+          GH_TOKEN: ${{ steps.token.outputs.token }}
+          BODY: ${{ github.event.issue.body }}
+          N: ${{ github.event.issue.number }}
+        run: |
+          if grep -qiE 'bump|upgrade|dependenc|lockfile|package\.json|pyproject' <<< "$BODY"; then
+            gh issue edit "$N" --add-label needs:human --remove-label ready-to-develop
+            gh issue comment "$N" --body "Dependency change — human work (ADR 0002)."
+            exit 1
+          fi
+
+      # Zone 1 gates. An unconfigured hook is indistinguishable from a passing
+      # one, so assert rather than assume — this was missed twice on Hermes.
+      - name: Arm the local gates
+        run: |
+          git config core.hooksPath .githooks
+          test "$(git config core.hooksPath)" = ".githooks"
+          test -x .githooks/pre-commit
+          test -x .githooks/pre-push
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Install Pi
+        run: npm install -g @earendil-works/pi-coding-agent
+
+      - name: Work the issue
+        env:
+          GH_TOKEN: ${{ steps.token.outputs.token }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          N: ${{ github.event.issue.number }}
+          REPO: ${{ github.repository }}
+        run: |
+          git switch -c "agent/issue-$N"
+
+          # Two channels, doing two jobs (NOTES.md section 2):
+          #
+          #   --approve      lets .pi/settings.json load at all. Without it,
+          #                  project config is silently ignored in CI.
+          #   --skill        loads regardless of trust, and carries the part
+          #                  that must differ per role. The reviewer never sees
+          #                  this file, and this role never sees the reviewer's.
+          #                  On Hermes the reviewer read an instruction meant
+          #                  for the implementer and refused to merge, twice.
+          #
+          # --mode json because the exit code is useless — see the next step.
+          # The role's instructions are in the skill file, not here. Keeping
+          # them in one place is the point: an instruction duplicated in two
+          # places is an instruction that will disagree with itself.
+          pi --mode json --approve \
+             --skill .agents/implementer.md \
+             --model "${{ vars.IMPLEMENT_MODEL }}" \
+             "Implement issue #$N in $REPO, following .agents/implementer.md.
+
+          Write your plan to $RUNNER_TEMP/plan.md before you write any code.
+          It becomes the pull request body." \
+             | tee "$RUNNER_TEMP/pi.jsonl"
+
+      # pi exits 0 when the task fails. Established by reading print-mode.ts and
+      # main.ts, not documented anywhere, and not yet confirmed by a run —
+      # NOTES.md section 1. So `if: failure()` cannot carry the escalation path.
+      - name: Assert the agent did something
+        run: |
+          # Primary check, and the robust one: did work actually appear?
+          if git diff --quiet origin/develop..HEAD; then
+            echo "No commits on the branch — the agent produced nothing."
+            exit 1
+          fi
+
+          # Secondary. The exact JSON field path is UNCONFIRMED; this is a
+          # tolerant match on purpose, and it only ever adds a failure.
+          # Tool-level isError is deliberately not checked — a failed tool call
+          # mid-run is normal, and only the final stop reason is a verdict.
+          if grep -qE '"stopReason"[[:space:]]*:[[:space:]]*"(error|aborted)"' "$RUNNER_TEMP/pi.jsonl"; then
+            echo "Pi reported a terminal stopReason of error or aborted."
+            exit 1
+          fi
+
+      - name: Publish the work
+        env:
+          GH_TOKEN: ${{ steps.token.outputs.token }}
+          N: ${{ github.event.issue.number }}
+        run: |
+          BRANCH="agent/issue-$N"
+          git push -u origin "$BRANCH"
+
+          # A commit is not delivered until it is on the remote. The Hermes run
+          # that cost the most was an implementer reporting work it had only
+          # committed locally, which the reviewer then read and approved.
+          LOCAL=$(git rev-parse HEAD)
+          REMOTE=$(git ls-remote origin "$BRANCH" | cut -f1)
+          test "$LOCAL" = "$REMOTE" || {
+            echo "Local HEAD $LOCAL does not match remote $REMOTE."
+            exit 1
+          }
+
+          # ADR 0007 — the plan lives in the pull request body and nowhere
+          # else. Not a committed file, so it cannot outlive the change and
+          # become a document a later implementer believes.
+          {
+            echo "## Plan"
+            echo
+            if [ -s "$RUNNER_TEMP/plan.md" ]; then
+              cat "$RUNNER_TEMP/plan.md"
+            else
+              echo "_The agent wrote no plan. Review the diff against the issue only,"
+              echo "and treat the omission as a finding._"
+            fi
+            echo
+            echo "---"
+            echo
+            echo "Closes #$N"
+            echo
+            echo "Head at open: $LOCAL"
+          } > "$RUNNER_TEMP/body.md"
+
+          gh pr create --draft --base develop \
+            --head "$BRANCH" \
+            --title "$(git log -1 --pretty=%s)" \
+            --body-file "$RUNNER_TEMP/body.md" \
+            --label agent
+
+      # Two attempts, then a human owns it. Never auto-closed.
+      - name: Escalate
+        if: failure()
+        env:
+          GH_TOKEN: ${{ steps.token.outputs.token }}
+          N: ${{ github.event.issue.number }}
+          RUN: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          if gh issue view "$N" --json labels -q '.labels[].name' | grep -qx 'attempt:1'; then
+            gh issue edit "$N" --add-label needs:human --remove-label ready-to-develop
+            gh issue comment "$N" --body "Second attempt failed; a human owns this now. $RUN"
+          else
+            gh issue edit "$N" --add-label attempt:1
+            gh issue comment "$N" --body "Attempt failed, re-queueing. $RUN"
+          fi

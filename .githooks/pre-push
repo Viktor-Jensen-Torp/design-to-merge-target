@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+# Runs before every push. Unit tests — the last gate inside the agent's own loop.
+#
+# Deliberately not end-to-end: those belong in CI, where they can be slow. This
+# hook has to stay fast enough that nobody reaches for --no-verify.
+set -euo pipefail
+
+fail() { printf '\n\033[31m✗ %s\033[0m\n' "$1"; exit 1; }
+
+command -v pnpm >/dev/null || fail "pnpm not found. Run: corepack enable"
+
+echo "→ unit tests"
+pnpm test --run || fail "Tests failed. Fix the code, not the test."
+
+printf '\033[32m✓ pre-push\033[0m\n'

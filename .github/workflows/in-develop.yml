@@ -1,0 +1,90 @@
+# Applies `in:develop` to every issue a merged pull request closes.
+#
+# ADR 0011: `Done` means merged to `main`. The middle state — merged to
+# `develop`, awaiting release — has to be readable by a human, by a Project view
+# and by any harness, so it is a label on the issue (`0001`, `0003`).
+#
+# Why not the gatekeeper, which already acts at merge time: it only *enqueues*.
+# The merge lands minutes later, inside the queue, in a run the gatekeeper is
+# not part of. It never sees the merge happen.
+#
+# Why the body is parsed by hand: GitHub only auto-closes linked issues when
+# the pull request merges into the DEFAULT branch (`NOTES.md` section 18) — and
+# it does not even record the link, so `closingIssuesReferences` is empty for a
+# pull request into `develop` (`NOTES.md` section 19). Nothing native survives
+# here; the parse is the only source.
+name: in-develop
+
+on:
+  pull_request:
+    types: [closed]
+
+permissions:
+  contents: read
+
+# This job never checks out. Without GH_REPO every `gh` call dies with
+# "not a git repository" (`NOTES.md` section 17b).
+env:
+  GH_REPO: ${{ github.repository }}
+
+jobs:
+  label:
+    if: >-
+      github.event.pull_request.merged == true &&
+      github.event.pull_request.base.ref == 'develop'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/create-github-app-token@v2
+        id: token
+        with:
+          app-id: ${{ vars.RELEASER_APP_ID }}
+          private-key: ${{ secrets.RELEASER_APP_PRIVATE_KEY }}
+
+      - name: Label every issue this pull request closes
+        env:
+          GH_TOKEN: ${{ steps.token.outputs.token }}
+          PR: ${{ github.event.pull_request.number }}
+          HEAD: ${{ github.event.pull_request.head.ref }}
+        run: |
+          set -euo pipefail
+
+          # GitHub does NOT create a closing-issue link for a pull request whose
+          # base is not the DEFAULT branch, so `closingIssuesReferences` comes
+          # back empty here even when the body says `Closes #n`
+          # (`NOTES.md` section 19 — established by running it, not by reading).
+          # So parse the body, skipping fenced code blocks, and accept every
+          # keyword GitHub itself accepts.
+          parse_closes() {
+            awk '/^[[:space:]]*```/{f=!f; next} !f' \
+            | grep -oiE '(close[sd]?|fix(e[sd])?|resolve[sd]?)[[:space:]]+#[0-9]+' \
+            | grep -oE '[0-9]+' | sort -un
+          }
+
+          ISSUES=$(gh pr view "$PR" --json body -q .body | parse_closes)
+
+          # An agent branch carries the issue number too. Belt and braces: a
+          # body that lost its `Closes #n` still lands, and a human's branch
+          # that has no such name still works through the body (`0008`).
+          case "$HEAD" in
+            agent/issue-*) ISSUES=$(printf '%s\n%s\n' "$ISSUES" "${HEAD##*issue-}" \
+                                      | grep -E '^[0-9]+$' | sort -un) ;;
+          esac
+
+          if [ -z "$ISSUES" ]; then
+            echo "::warning::pull request #$PR closes no issue — nothing to label"
+            exit 0
+          fi
+
+          for N in $ISSUES; do
+            gh issue edit "$N" --add-label "in:develop"
+            echo "issue #$N -> in:develop"
+          done
+
+          # Assert it. A label that did not apply looks exactly like one that
+          # did, and the release reads this label to build its list.
+          for N in $ISSUES; do
+            gh issue view "$N" --json labels -q '[.labels[].name]|join(",")' \
+              | grep -q 'in:develop' \
+              || { echo "::error::issue #$N did not take the in:develop label"; exit 1; }
+          done

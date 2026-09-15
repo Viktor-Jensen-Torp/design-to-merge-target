@@ -1,0 +1,71 @@
+# CI. Goes in the TARGET repo at .github/workflows/ci.yml.
+#
+# Two strings in this file are load-bearing and both fail silently:
+#
+#   name: CI          `review.yml` triggers on `workflow_run` matching this
+#                     LITERALLY. Rename it and the reviewer simply never fires.
+#
+#   merge_group       Every check required by the `develop` ruleset must also
+#                     run on this event. A required check that never reports for
+#                     a merge group leaves the queue entry to die at the
+#                     status-check timeout, with nothing saying why (NOTES.md 12).
+#
+# Mark as required on `develop`: quality, test.
+# Add e2e and mutation to the required set once they are stable — and only if
+# they run on merge_group too, which they do here.
+
+name: CI
+
+on:
+  pull_request:
+  merge_group:
+  push:
+    # CI on develop is the guard that stops a broken branch point poisoning
+    # every implementer that cuts from it (PRD, "The merge queue closes the
+    # last gap").
+    branches: [develop]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  quality:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm lint
+      - run: pnpm format:check
+      - run: pnpm typecheck
+
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm test --run
+
+
+# `e2e` and `mutation` are deliberately ABSENT, not stubbed.
+#
+# The tooling for them — Playwright, Stryker — is not installed yet. A job that
+# echoes and exits 0 would be a green gate that checks nothing, which is the
+# exact failure this pipeline keeps hitting. An absent gate is visible; a
+# vacuous one is not. Both jobs are in the design repo's `workflows/ci.yml`,
+# ready to paste back when the tooling lands.
