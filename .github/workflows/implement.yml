@@ -54,17 +54,20 @@ jobs:
 
       # ADR 0002 — dependency changes are human work. Refuse before spending a
       # token rather than after reading a diff.
-      - name: Refuse dependency work
-        env:
-          GH_TOKEN: ${{ steps.token.outputs.token }}
-          BODY: ${{ github.event.issue.body }}
-          N: ${{ github.event.issue.number }}
-        run: |
-          if grep -qiE 'bump|upgrade|dependenc|lockfile|package\.json|pyproject' <<< "$BODY"; then
-            gh issue edit "$N" --add-label needs:human --remove-label ready-to-develop
-            gh issue comment "$N" --body "Dependency change — human work (ADR 0002)."
-            exit 1
-          fi
+      # There is deliberately NO text check on the issue body for dependency work.
+      #
+      # There used to be: a grep for bump|upgrade|dependenc|lockfile|package.json.
+      # On the first real issue it refused one whose body said "**No new
+      # dependencies.**" — prose cannot distinguish an issue that NEEDS a
+      # dependency from one that FORBIDS one, and the well-written issue is the
+      # one that says the word (`NOTES.md` section 21).
+      #
+      # ADR 0002 is unchanged; only where it is enforced has moved. The
+      # authoritative gate is the diff, in `review.yml`'s deterministic risk
+      # check: any change touching package.json or pnpm-lock.yaml escalates to a
+      # human without spending a model. That gate cannot be fooled by wording,
+      # and it catches the case this one missed — an issue that needs a
+      # dependency without ever using the word.
 
       # Zone 1 gates. An unconfigured hook is indistinguishable from a passing
       # one, so assert rather than assume — this was missed twice on Hermes.
