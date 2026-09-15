@@ -7,6 +7,8 @@
 #   secrets.IMPLEMENTER_APP_PRIVATE_KEY   its private key, whole file
 #   secrets.OPENROUTER_API_KEY
 #   vars.IMPLEMENT_MODEL
+#   scripts/pi-driver.py          the finish gate (from this repo's target/scripts/)
+#   .agents/nudge-implementer.md  what the gate says when it is not satisfied
 
 name: Implement
 
@@ -100,6 +102,8 @@ jobs:
         run: |
           test -d node_modules || { echo "::error::no node_modules after install"; exit 1; }
           pnpm exec tsc --version >/dev/null || { echo "::error::toolchain not runnable"; exit 1; }
+          python3 --version >/dev/null || { echo "::error::no python3 for the driver"; exit 1; }
+          test -x scripts/pi-driver.py || { echo "::error::scripts/pi-driver.py missing"; exit 1; }
 
       # The agent is GIVEN the issue. It is not asked to find it.
       #
@@ -174,21 +178,65 @@ jobs:
           #                  is what Hermes did with its per-profile YAML:
           #                  role instructions as a stable system block.
           #
-          # --mode json because the exit code is useless — see the next step.
-          # The role's instructions are in the skill file, not here. Keeping
-          # them in one place is the point: an instruction duplicated in two
-          # places is an instruction that will disagree with itself.
+          # The role's instructions are in .agents/implementer.md, not here.
+          # Keeping them in one place is the point: an instruction duplicated in
+          # two places is an instruction that will disagree with itself.
           # Refuse to run an agent with no role instructions. `--skill` used to
           # fail silently here and two runs went out with none (`NOTES.md` 25).
           test -s .agents/implementer.md \
             || { echo "::error::.agents/implementer.md is missing or empty"; exit 1; }
+          test -s .agents/nudge-implementer.md \
+            || { echo "::error::.agents/nudge-implementer.md is missing or empty"; exit 1; }
           echo "role instructions: $(wc -c < .agents/implementer.md) bytes"
 
-          pi --mode json --approve \
-             --append-system-prompt "$(cat .agents/implementer.md)" \
-             --model "${{ vars.IMPLEMENT_MODEL }}" \
-             "$(cat "$RUNNER_TEMP/prompt.md")" \
-             | tee "$RUNNER_TEMP/pi.jsonl"
+          # WHEN IS THE IMPLEMENTER FINISHED?
+          #
+          # A clean tree ALONE is not the answer — it is true at checkout, before
+          # the agent has done anything, so on its own it is a gate that is green
+          # before the work starts. The answer is a clean tree AND work on the
+          # branch (`NOTES.md` 27).
+          #
+          # This script's OUTPUT is what the agent is shown when it stops early,
+          # so it reports state rather than repeating the role file.
+          cat > "$RUNNER_TEMP/done.sh" <<'DONE'
+          st=$(git status --porcelain)
+          ahead=$(git rev-list --count origin/develop..HEAD)
+          [ -n "$st" ] && { echo "Uncommitted changes in the working tree:"; echo "$st"; }
+          [ "$ahead" = 0 ] && echo "No commits on this branch beyond origin/develop."
+          [ -z "$st" ] && [ "$ahead" -gt 0 ]
+          DONE
+
+          # `pi --mode rpc` plus a driver, NOT `pi --mode json`.
+          #
+          # `pi -p` exits 0 when the task fails and `--mode json` never checks
+          # the stop reason (`NOTES.md` 1), so every previous version of this
+          # step was a gate that could not go red. Three runs implemented the
+          # issue correctly, stopped without committing, and reported success.
+          #
+          # scripts/pi-driver.py owns the loop and the exit code: it waits for
+          # `agent_settled`, runs done.sh, and either finishes or gives the agent
+          # another turn, up to --max-nudges. It exits 1 when the budget runs out
+          # and 2 on a timeout, which is what makes `if: failure()` below mean
+          # anything at all.
+          #
+          # --idle-timeout is the answer to a provider that simply hangs; the
+          # first real run sat twenty minutes on a free model with the job
+          # timeout as its only backstop. Both driver timeouts are set below the
+          # job's 45 minutes so the driver, not the runner, reports the failure.
+          #
+          # Everything the model says and every tool it calls is streamed to this
+          # job's log as it happens.
+          python3 scripts/pi-driver.py \
+            --prompt-file "$RUNNER_TEMP/prompt.md" \
+            --nudge-file .agents/nudge-implementer.md \
+            --done "bash $RUNNER_TEMP/done.sh" \
+            --max-nudges 2 \
+            --idle-timeout 600 \
+            --timeout 2100 \
+            --log "$RUNNER_TEMP/rpc.jsonl" \
+            -- pi --mode rpc --approve \
+                  --append-system-prompt "$(cat .agents/implementer.md)" \
+                  --model "${{ vars.IMPLEMENT_MODEL }}"
 
       # Cheap and local. review.yml escalates a dependency diff to a human, but
       # that costs a whole round trip to say something knowable here.
@@ -200,25 +248,21 @@ jobs:
             exit 1
           fi
 
-      # pi exits 0 when the task fails. Established by reading print-mode.ts and
-      # main.ts, not documented anywhere, and not yet confirmed by a run —
-      # NOTES.md section 1. So `if: failure()` cannot carry the escalation path.
-      - name: Assert the agent did something
-        run: |
-          # Primary check, and the robust one: did work actually appear?
-          if git diff --quiet origin/develop..HEAD; then
-            echo "No commits on the branch — the agent produced nothing."
-            exit 1
-          fi
+      # There is deliberately no "assert the agent did something" step here any
+      # more. It used to re-run `git diff --quiet origin/develop..HEAD` and grep
+      # the JSON stream for a stop reason. The driver's done.sh is now that
+      # check, it runs while the agent can still act on it, and a check written
+      # in two places is a check that will eventually disagree with itself.
 
-          # Secondary. The exact JSON field path is UNCONFIRMED; this is a
-          # tolerant match on purpose, and it only ever adds a failure.
-          # Tool-level isError is deliberately not checked — a failed tool call
-          # mid-run is normal, and only the final stop reason is a verdict.
-          if grep -qE '"stopReason"[[:space:]]*:[[:space:]]*"(error|aborted)"' "$RUNNER_TEMP/pi.jsonl"; then
-            echo "Pi reported a terminal stopReason of error or aborted."
-            exit 1
-          fi
+      # The whole RPC event stream, for reading a failure without re-running it.
+      - name: Keep the transcript
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rpc-issue-${{ github.event.issue.number }}
+          path: ${{ runner.temp }}/rpc.jsonl
+          if-no-files-found: warn
+          retention-days: 7
 
       - name: Publish the work
         env:
