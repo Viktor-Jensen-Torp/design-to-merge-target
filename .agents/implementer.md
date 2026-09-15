@@ -5,11 +5,13 @@ request — the workflow does both after you finish.
 
 ## Read first
 
-    gh issue view <n> --repo <repo> --comments
+**The issue is already in your prompt**, in full, between `BEGIN ISSUE` and
+`END ISSUE`. You do not need to fetch it and you should not go looking for it
+in the git history — it is not there.
 
-The issue is the source of truth (`0001`). There is no spec file. Read
-`AGENTS.md` too: it holds the repository's conventions and the corrections
-earlier reviews have already made.
+The issue is the source of truth (`0001`). There is no spec file. Its acceptance
+criteria are what you are judged on. Read `AGENTS.md` too: it holds the
+repository's conventions and the corrections earlier reviews have already made.
 
 ## Write the plan before you write code
 
