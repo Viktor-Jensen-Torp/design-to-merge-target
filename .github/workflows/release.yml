@@ -63,9 +63,18 @@ jobs:
                  | sed -n 's/.*(#\([0-9][0-9]*\))[[:space:]]*$/\1/p' | sort -un)
 
           if [ -z "$PRS" ]; then
-            echo "::error::no (#n) subjects in $BEFORE..$AFTER"
-            echo "::error::Was the release squashed? It has to be a merge commit — see this file's header."
-            exit 1
+            # Distinguish "this was not a release" from "the release is broken".
+            # A release arrives as a merge commit. A direct push — repository
+            # setup, a hotfix, a docs typo — is not a release and has nothing to
+            # close. Erroring on those would leave this workflow permanently red
+            # and train everyone to ignore it, which costs more than it saves.
+            if [ "$(git rev-list --no-walk --count --merges "$AFTER")" = "1" ]; then
+              echo "::error::merge commit $AFTER carries no (#n) subjects"
+              echo "::error::Was the release squashed? It has to be a merge commit — see this file's header."
+              exit 1
+            fi
+            echo "::notice::$AFTER is not a merge commit — not a release, nothing to close"
+            exit 0
           fi
           echo "pull requests in this release: $(echo $PRS | tr '\n' ' ')"
 
