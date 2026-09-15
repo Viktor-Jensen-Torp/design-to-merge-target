@@ -32,7 +32,9 @@ both jobs come back from the design repo rather than being stubbed, because a
 job that exits 0 without checking anything is worse than no job.
 
 A healthy `pnpm test` ends with a line like `Test Files  12 passed (12)`.
-A healthy `pnpm typecheck` prints nothing and exits 0.
+A healthy `pnpm typecheck` ends with `tsc` printing nothing and exiting 0. It
+runs `next typegen` first: route and layout types are generated, not written by
+hand, and `tsc` alone cannot see them on a clean checkout.
 
 ## Rules
 

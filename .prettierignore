@@ -1,3 +1,13 @@
 .next
 node_modules
 pnpm-lock.yaml
+
+# Root of trust. These are copied verbatim from the design repo — reformatting
+# them would drift the two apart, and AGENTS.md forbids agents touching them
+# anyway. Their style is not this project's business.
+.agents
+.github
+.githooks
+AGENTS.md
+CLAUDE.md
+CODEOWNERS
