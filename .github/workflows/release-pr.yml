@@ -11,6 +11,23 @@
 # The body is the review aid, not a changelog. Per `0011` the release reviews
 # the SEAMS: the files more than one issue touched, which is the one thing
 # per-pull-request review is blind to by construction.
+#
+# TWO TRIGGERS, DOING DIFFERENT JOBS.
+#
+#   workflow_dispatch   opens the release, or refreshes an open one
+#   push to develop     refreshes an open one, and NEVER opens one
+#
+# The push trigger exists because the body is written once and the pull request
+# is not. A release pull request tracks `develop`, so anything merged after it
+# opens ships inside it — while the "What is shipping" list, written at open
+# time, does not mention it. On 2026-09-15 a release shipped a change to
+# `review.yml` that its own manifest omitted, because the dispatch ran 38
+# seconds before that pull request merged (`NOTES.md` 30). ADR 0011 makes that
+# body the human's reading list, so a change missing from it is invisible in the
+# one place the design says to look.
+#
+# It never CREATES on push: opening a release stays a deliberate act. Describing
+# one accurately should not depend on timing.
 name: release-pr
 
 on:
@@ -22,9 +39,19 @@ on:
       base:
         description: "branch to release into"
         default: main
+  push:
+    branches: [develop]
 
 permissions:
   contents: read
+
+# The one place in this design where cancelling is right. Every run recomputes
+# the whole range from scratch, so a superseded run has nothing the newer one
+# will not redo — unlike `implement.yml`, where a cancelled run is lost work
+# (`NOTES.md` 5). Two merges landing seconds apart must not race on `gh pr edit`.
+concurrency:
+  group: release-pr
+  cancel-in-progress: true
 
 jobs:
   open:
@@ -47,8 +74,10 @@ jobs:
       - name: Describe the release, then open or update the pull request
         env:
           GH_TOKEN: ${{ steps.token.outputs.token }}
-          HEAD: ${{ inputs.head }}
-          BASE: ${{ inputs.base }}
+          # `inputs` is empty on a push, so the defaults are restated here.
+          HEAD: ${{ inputs.head || 'develop' }}
+          BASE: ${{ inputs.base || 'main' }}
+          MAY_CREATE: ${{ github.event_name == 'workflow_dispatch' }}
         run: |
           set -euo pipefail
           RANGE="origin/$BASE..origin/$HEAD"
@@ -130,7 +159,9 @@ jobs:
             gh pr edit "$EXISTING" --body-file "$BODY"
             echo "::notice::updated existing release pull request #$EXISTING"
             gh pr view "$EXISTING" --json url -q .url
-          else
+          elif [ "$MAY_CREATE" = "true" ]; then
             gh pr create --base "$BASE" --head "$HEAD" \
               --title "Release: $HEAD → $BASE" --body-file "$BODY"
+          else
+            echo "::notice::no open release pull request to refresh, and a push never opens one"
           fi

@@ -1,4 +1,5 @@
-# Closes the issues a release actually shipped, and clears `in:develop`.
+# Closes the issues a release actually shipped, and clears the labels that
+# said where in the pipeline they were.
 #
 # ADR 0011: `Done` means merged to `main`.
 #
@@ -121,7 +122,29 @@ jobs:
                 --comment "Released to \`main\` in ${SHA}. (ADR 0011: \`Done\` means merged to \`main\`.)"
               echo "issue #$N -> closed"
             fi
-            gh issue edit "$N" --remove-label "in:develop" 2>/dev/null || true
+            # Clear every label that says WHERE IN THE PIPELINE the issue is.
+            # `in:develop` alone was not enough: issue #4 shipped and closed
+            # still carrying `ready-to-develop`, which reads as queued work
+            # (`NOTES.md` 31). `needs:human` and `needs:rework` are deliberately
+            # left — an issue that shipped while carrying one is information,
+            # not litter.
+            #
+            # Read the labels once and remove only those present, in a single
+            # call. Blind removes cost one API write each and 404 for labels the
+            # issue does not have; the secondary rate limit is 80 writes a
+            # minute across the whole repository.
+            STALE=$(gh issue view "$N" --json labels \
+                      -q '[.labels[].name
+                           | select(. == "in:develop" or . == "ready-to-develop"
+                                    or startswith("attempt:"))]
+                          | join(",")')
+            # An `if`, not `[ -n "$STALE" ] && ...`. Under `set -e` a failing
+            # AND-OR list as the last command of a loop body is a coin toss
+            # nobody should have to reason about (`NOTES.md` 24).
+            if [ -n "$STALE" ]; then
+              gh issue edit "$N" --remove-label "$STALE"
+              echo "issue #$N -> cleared $STALE"
+            fi
           done
 
           # Assert the outcome. A close that silently failed leaves the board
