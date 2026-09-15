@@ -165,8 +165,14 @@ jobs:
         run: |
           # Same role, same skill file. Only the task differs — this is not a
           # second implementer with its own instructions to drift from the first.
+          # Refuse to run an agent with no role instructions. `--skill` used to
+          # fail silently here and two runs went out with none (`NOTES.md` 25).
+          test -s .agents/implementer.md \
+            || { echo "::error::.agents/implementer.md is missing or empty"; exit 1; }
+          echo "role instructions: $(wc -c < .agents/implementer.md) bytes"
+
           pi --mode json --approve \
-             --skill .agents/implementer.md \
+             --append-system-prompt "$(cat .agents/implementer.md)" \
              --model "${{ vars.IMPLEMENT_MODEL }}" \
              "You are reworking pull request #$PR in $REPO, following
           .agents/implementer.md.
