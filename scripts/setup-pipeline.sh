@@ -192,6 +192,28 @@ REPO="${REPO:-design-to-merge-target}"
 
 # ── helpers for this wizard ───────────────────────────────────────────────
 
+# drain_stdin discards anything already buffered. Pasting a secret leaves a
+# trailing newline behind, and that newline satisfies the NEXT `read` — which
+# silently answers the next prompt with "" before the human ever sees it.
+drain_stdin() {
+  while IFS= read -r -t 0 2>/dev/null; do IFS= read -r _ 2>/dev/null || break; done
+  return 0
+}
+
+# ask_required KEY "Prompt" is `ask` that will not take "" for an answer.
+# Accepting empty is how IMPLEMENT_MODEL went missing on the first real run.
+ask_required() {
+  local key="$1" prompt="$2" tries=0
+  while (( tries < 5 )); do
+    tries=$((tries + 1))
+    drain_stdin
+    ask "$key" "$prompt"
+    [[ -n "${!key}" ]] && return 0
+    warn "this one cannot be left empty"
+  done
+  return 1
+}
+
 # slugify "My App Name" -> "my-app-name", the way GitHub derives an app_slug.
 slugify() {
   printf '%s' "$1" | tr '[:upper:]' '[:lower:]' | sed -E 's/[^a-z0-9]+/-/g; s/^-+//; s/-+$//'
@@ -359,6 +381,7 @@ warn "On free models the ceiling is REQUESTS, not dollars:"
 note "  20/minute, and 50/day unless you have PURCHASED at least \$10 of credit,"
 note "  which raises it to 1,000/day. One issue costs tens of requests."
 printf '\n'
+drain_stdin
 ask_secret OPENROUTER_API_KEY "Paste the key (hidden):"
 if [[ -n "$OPENROUTER_API_KEY" ]]; then
   set_secret OPENROUTER_API_KEY "$OPENROUTER_API_KEY"
@@ -379,13 +402,13 @@ note "  e.g. vendor/model-name:free — copy the id exactly as shown."
 printf '\n'
 for pair in "IMPLEMENT_MODEL:implementer" "REVIEW_MODEL:reviewer" "GATEKEEP_MODEL:gatekeeper"; do
   v="${pair%%:*}"; who="${pair##*:}"
-  ask "$v" "Model id for the $who:"
-  val="${!v}"
-  if [[ -n "$val" ]]; then
+  if ask_required "$v" "Model id for the $who:"; then
+    val="${!v}"
     write_env "$v" "$val"
     set_var "$v" "$val"
   else
     SKIPPED+=("$v")
+    warn "no model for the $who — that role cannot run"
   fi
 done
 
