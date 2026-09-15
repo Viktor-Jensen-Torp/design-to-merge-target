@@ -63,8 +63,13 @@ jobs:
           parse_closes() {
             awk '/^[[:space:]]*```/{f=!f; next} !f' \
             | grep -oiE '(close[sd]?|fix(e[sd])?|resolve[sd]?)[[:space:]]+#[0-9]+' \
-            | grep -oE '[0-9]+' | sort -un
+            | grep -oE '[0-9]+' | sort -un || true
           }
+          # The `|| true` is load-bearing. grep exits 1 when it matches nothing,
+          # `set -o pipefail` promotes that to the pipeline, and `set -e` then
+          # kills the job — with NO output at all, because grep says nothing
+          # when it finds nothing. A pull request with no `Closes #n` is
+          # ordinary, not an error (`NOTES.md` section 24).
 
           # commit -> pull request, from the squash subjects. This is why the
           # queue squashes into develop and releases are merge commits (`0011`).
