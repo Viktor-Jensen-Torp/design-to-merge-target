@@ -8,20 +8,28 @@
     "and whichever provider serves the request applies its own. A `:free` model",
     "routes across several providers, so the sampling that produced any given",
     "token was chosen by whoever answered, and a retry can land somewhere else.",
-    "That is `NOTES.md` 43, and it is the leading candidate for the token soup",
-    "in `NOTES.md` 38.",
+    "That is `NOTES.md` 43, and the leading candidate for the token soup in 38.",
     "",
     "`samplingParams` is merged VERBATIM into the request body and its keys win",
     "(`models.md`), so it carries both the sampling AND OpenRouter's top-level",
-    "`provider` routing block. One field, both hypotheses.",
+    "`provider` routing block.",
     "",
-    "UNVERIFIED, deliberately: OpenRouter warns that sending values explicitly",
-    "can affect provider-side cache keys, and its documentation says nothing",
-    "about how provider routing interacts with `:free` variants. We are finding",
-    "out by running it. If this file makes things worse, delete it \u2014 that is a",
-    "result, not a setback.",
+    "TWO THINGS WERE REMOVED ON 2026-09-16, THE DAY THIS FILE WAS ADDED.",
     "",
-    "No `sort`. Sorting by throughput selects the fastest node, which is also how you find a heavily quantised one \u2014 the opposite of what we are testing. `require_parameters: true` restricts routing to providers that actually honour the sampling we send, which is the point of sending it."
+    "`require_parameters: true` is gone. It restricts routing to providers that",
+    "honour every parameter sent, which sounds like exactly what we want \u2014 but",
+    "on a `:free` variant it can leave ZERO eligible providers, and zero is an",
+    "instant error rather than a fallback. The first review run after this file",
+    "landed failed three times in three seconds with stopReason=error. That is",
+    "not proof it was the cause, and the driver now logs the provider's own",
+    "message so the next one will say. Until then the safe default is to ask for",
+    "sampling and accept a provider that may not honour all of it.",
+    "",
+    "`top_p` is gone from laguna. OpenRouter's model list does not include top_p",
+    "in its supported_parameters at all \u2014 sending it was wrong regardless.",
+    "",
+    "No `sort`. Sorting by throughput selects the fastest node, which is also how",
+    "you find a heavily quantised one \u2014 the opposite of what we are testing."
   ],
   "providers": {
     "openrouter": {
@@ -31,8 +39,7 @@
             "temperature": 0.2,
             "top_p": 0.9,
             "provider": {
-              "allow_fallbacks": true,
-              "require_parameters": true
+              "allow_fallbacks": true
             }
           }
         },
@@ -41,18 +48,15 @@
             "temperature": 0.1,
             "top_p": 0.9,
             "provider": {
-              "allow_fallbacks": true,
-              "require_parameters": true
+              "allow_fallbacks": true
             }
           }
         },
         "poolside/laguna-s-2.1:free": {
           "samplingParams": {
             "temperature": 0.0,
-            "top_p": 1.0,
             "provider": {
-              "allow_fallbacks": true,
-              "require_parameters": true
+              "allow_fallbacks": true
             }
           }
         }

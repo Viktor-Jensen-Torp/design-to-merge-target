@@ -371,6 +371,15 @@ jobs:
                   --model "${{ vars.REVIEW_MODEL }}" \
                   --tools read,grep,find,ls,bash,submit_review
 
+      - name: Keep the transcript
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rpc-reviewer-pr-${{ needs.triage.outputs.number }}
+          path: ${{ runner.temp }}/rpc.jsonl
+          if-no-files-found: warn
+          retention-days: 7
+
   # ── The authority. Serial, so two merges never race.
   gatekeep:
     needs: [triage, review]
@@ -721,6 +730,15 @@ jobs:
                   --append-system-prompt "$(cat .agents/gatekeeper.md)" \
                   --model "${{ vars.GATEKEEP_MODEL }}" \
                   --tools read,grep,find,ls,bash
+
+      - name: Keep the transcript
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rpc-gatekeeper-pr-${{ needs.triage.outputs.number }}
+          path: ${{ runner.temp }}/rpc.jsonl
+          if-no-files-found: warn
+          retention-days: 7
 
       # Silence is the one outcome not allowed. On the Hermes rig a reviewer
       # twice decided privately that a human should handle something and then

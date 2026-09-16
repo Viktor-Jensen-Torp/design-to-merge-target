@@ -282,9 +282,18 @@ def main():
                     # "length" means the reply was truncated mid-thought, which
                     # is indistinguishable from a finished one in the text —
                     # and "error"/"aborted" mean the turn did not happen at all.
-                    reason = (ev.get("message") or {}).get("stopReason")
+                    msg = ev.get("message") or {}
+                    reason = msg.get("stopReason")
                     if reason and reason not in ("stop", "toolUse"):
-                        log(f"  ! turn ended on stopReason={reason}")
+                        # `errorMessage` sits next to `stopReason` on the same
+                        # message and is the only place the provider's own words
+                        # appear. Logging the reason without it told us a review
+                        # had failed three times in three seconds and nothing
+                        # about why (`NOTES.md` 45).
+                        detail = msg.get("errorMessage") or ""
+                        if detail:
+                            detail = ": " + str(detail)[:600].replace("\n", " ⏎ ")
+                        log(f"  ! turn ended on stopReason={reason}{detail}")
                         stop_reasons.append(reason)
 
                 elif t == "auto_retry_start":
