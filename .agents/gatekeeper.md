@@ -25,7 +25,14 @@ The reviewer said `merge`, **and** you agree the change is confined to the scope
 of the issue it closes. Then, exactly:
 
     gh pr ready <n> --repo <repo>
-    gh pr merge <n> --repo <repo>
+    gh pr merge <n> --repo <repo> --match-head-commit <the reviewed commit>
+
+`--match-head-commit` is the commit the reviewer's review was submitted against;
+your prompt names it. GitHub refuses the merge if the head has moved since, so
+the commit that merges is always the commit that was read (`0009` guard 2,
+`0012`). If it refuses for that reason, do not retry without the flag — the
+change is no longer the one that was reviewed, and a fresh review is already on
+its way.
 
 No `--squash`, and no `--delete-branch`. Under a merge queue GitHub **refuses**
 both: the merge method comes from the ruleset, and the queue deletes the branch
