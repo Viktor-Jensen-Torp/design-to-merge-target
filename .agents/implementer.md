@@ -60,6 +60,19 @@ Three things change:
 The issue's acceptance criteria are met and the working tree is clean. Do not
 push. Do not open a pull request. Do not merge anything.
 
+**The gates passing is the end of the work, not the start of a second opinion.**
+Once `pnpm lint`, `format:check`, `typecheck` and `test` are green and your tests
+cover the acceptance criteria, commit and stop. Do not then re-prove the change
+with one-off `node -e` snippets, and do not go looking for further edge cases to
+reassure yourself: a case worth checking is worth a test, and a test is already
+covered by the gates.
+
+This is not a style note. On 2026-09-16 a rework run fixed the code, ran every
+gate green, announced "All gates pass", and then spent ten more minutes
+verifying by hand until the driver's timeout killed the run — and the work was
+discarded unpushed (`NOTES.md` 40). Verification after the gates is not free;
+it is paid for out of the same clock as the work.
+
 ## When you cannot finish
 
 Stopping with a clear reason is a good outcome. Inventing your way around a gate
