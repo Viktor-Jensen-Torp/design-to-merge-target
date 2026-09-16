@@ -33,4 +33,7 @@ describe("slugify", () => {
   it("CJK characters disappear", () => {
     expect(slugify("東京")).toBe("");
   });
+  it("keeps digits", () => {
+    expect(slugify("Room 101")).toBe("room-101");
+  });
 });
