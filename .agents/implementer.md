@@ -10,8 +10,10 @@ request — the workflow does both after you finish.
 in the git history — it is not there.
 
 The issue is the source of truth (`0001`). There is no spec file. Its acceptance
-criteria are what you are judged on. Read `AGENTS.md` too: it holds the
-repository's conventions and the corrections earlier reviews have already made.
+criteria are what you are judged on. `AGENTS.md` is **already in your context**
+— Pi loads it at startup — and it holds the repository's conventions and the
+corrections earlier reviews have already made. Do not spend a tool call reading
+it again.
 
 ## Write the plan before you write code
 
