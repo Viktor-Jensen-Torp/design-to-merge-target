@@ -60,6 +60,12 @@ Three things change:
 The issue's acceptance criteria are met and the working tree is clean. Do not
 push. Do not open a pull request. Do not merge anything.
 
+**Then call `submit_implementation`.** That is how you finish; nothing else ends
+your run. It checks the tree is clean and that there is a commit on the branch,
+and if either is untrue it refuses and tells you which — fix that and call it
+again. Three runs have now produced a correct change and ended without
+committing it (`NOTES.md` 1), and the reason was always that nothing asked.
+
 **The gates passing is the end of the work, not the start of a second opinion.**
 Once `pnpm lint`, `format:check`, `typecheck` and `test` are green and your tests
 cover the acceptance criteria, commit and stop. Do not then re-prove the change

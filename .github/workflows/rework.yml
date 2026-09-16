@@ -177,6 +177,11 @@ jobs:
         env:
           GH_TOKEN: ${{ steps.token.outputs.token }}
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          # Same tool as the implementer — this role commits to the same branch
+          # and finishes the same way.
+          PI_ROLE: rework
+          PI_BASE_REF: origin/develop
+          PI_OFFLINE: "1"
           PR: ${{ github.event.pull_request.number }}
           REPO: ${{ github.repository }}
           HEAD_REF: ${{ github.event.pull_request.head.ref }}
@@ -191,6 +196,8 @@ jobs:
             || { echo "::error::.agents/nudge-implementer.md is missing or empty"; exit 1; }
           test -x scripts/pi-driver.py \
             || { echo "::error::scripts/pi-driver.py is missing"; exit 1; }
+          test -s .pi/extensions/submit.ts \
+            || { echo "::error::.pi/extensions/submit.ts missing — the role is told to call submit_implementation"; exit 1; }
           python3 --version >/dev/null \
             || { echo "::error::no python3 for the driver"; exit 1; }
           echo "role instructions: $(wc -c < .agents/implementer.md) bytes"

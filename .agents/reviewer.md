@@ -59,26 +59,17 @@ written afterwards than to have been followed. Say so if you see it.
 
 ## Your output
 
-**Write one JSON file, then run one command.** Nothing else ends your run:
+**Call one tool.** Nothing else ends your run:
 
-    scripts/post-review.py <repo> <n> <findings.json>
+    submit_review(event, body, comments)
 
-The file:
-
-    {
-      "event": "APPROVE",            // merge
-                "REQUEST_CHANGES",   // rework
-                "COMMENT",           // unsure
-      "body": "the findings, grouped by pass, each tagged [Important] or [Nit]",
-      "comments": [
-        { "path": "lib/slug.ts", "line": 42,
-          "body": "This cuts inside a hyphenated word." }
-      ]
-    }
-
-**`event` is the verdict** (`0012`). Do not also write "merge", "rework" or
-"unsure" in the body — the review's state is the decision, and a second copy of
-it in prose is a second thing that can disagree.
+- **`event`** is the verdict (`0012`): `APPROVE` to merge, `REQUEST_CHANGES` to
+  send it back, `COMMENT` when you cannot tell or are asking a question. Do not
+  also write "merge", "rework" or "unsure" in the body — the review's state is
+  the decision, and a second copy of it in prose is a second thing that can
+  disagree.
+- **`body`** is the findings, grouped by pass, each tagged [Important] or [Nit].
+- **`comments`** is a list of `{path, line, body}`.
 
 **Put every finding that is about a specific line on that line.** `comments` is
 how a person reads a review: in Files changed, next to the code, months later,
@@ -91,10 +82,12 @@ that is only described in the body makes the reader go and find it.
   the diff disagree, a criterion is unmet — belong in `body`. Do not invent a
   line to attach them to.
 - Inline comments are best effort and the verdict is not: if an anchor is
-  refused, the script re-posts with the body alone and folds those findings into
+  refused, the tool re-posts with the body alone and folds those findings into
   it, so nothing you said is lost. It will tell you when that happens.
 
-The script writes `commit_id` for you. **You do not state the head SHA anywhere**
+If the tool refuses, it says why, and you can call it again with that fixed.
+
+The tool writes `commit_id` for you. **You do not state the head SHA anywhere**
 — GitHub records it on the review, and the gatekeeper reads it from there
 (`0009` guard 2). This used to be your job and a guard depended on you
 remembering.
