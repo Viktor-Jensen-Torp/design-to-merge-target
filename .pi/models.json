@@ -14,19 +14,26 @@
     "(`models.md`), so it carries both the sampling AND OpenRouter's top-level",
     "`provider` routing block.",
     "",
-    "TWO THINGS WERE REMOVED ON 2026-09-16, THE DAY THIS FILE WAS ADDED.",
+    "ON `require_parameters: true`. It restricts routing to providers that honour",
+    "every parameter in the request. Kept deliberately, as a decision on",
+    "2026-09-16: if we are pinning sampling at all, we want it actually applied,",
+    "and a loud failure is better than a provider quietly ignoring it. The cost",
+    "is that when NO provider qualifies, OpenRouter errors rather than falling",
+    "back \u2014 so this can take a `:free` variant from one eligible host to none.",
     "",
-    "`require_parameters: true` is gone. It restricts routing to providers that",
-    "honour every parameter sent, which sounds like exactly what we want \u2014 but",
-    "on a `:free` variant it can leave ZERO eligible providers, and zero is an",
-    "instant error rather than a fallback. The first review run after this file",
-    "landed failed three times in three seconds with stopReason=error. That is",
-    "not proof it was the cause, and the driver now logs the provider's own",
-    "message so the next one will say. Until then the safe default is to ask for",
-    "sampling and accept a provider that may not honour all of it.",
+    "The first review run after this file landed failed three times in three",
+    "seconds on stopReason=error, and this flag is the obvious suspect. It is",
+    "NOT established: the implementer ran fine with the same flag, and the",
+    "hypothesis that the reviewer's model lacks `tool_choice` was checked and is",
+    "WRONG \u2014 Pi does not send `tool_choice` (probed 2026-09-16, request body is",
+    "model, messages, stream, stream_options, store, max_completion_tokens,",
+    "tools). The driver now logs `errorMessage` next to `stopReason`, so the",
+    "next failure will say what it actually was rather than that it happened.",
     "",
-    "`top_p` is gone from laguna. OpenRouter's model list does not include top_p",
-    "in its supported_parameters at all \u2014 sending it was wrong regardless.",
+    "`top_p` is NOT set for laguna. OpenRouter's model list does not include",
+    "top_p in its supported_parameters at all, so sending it was wrong",
+    "regardless of routing \u2014 and with require_parameters on it would guarantee",
+    "zero eligible providers.",
     "",
     "No `sort`. Sorting by throughput selects the fastest node, which is also how",
     "you find a heavily quantised one \u2014 the opposite of what we are testing."
@@ -39,7 +46,8 @@
             "temperature": 0.2,
             "top_p": 0.9,
             "provider": {
-              "allow_fallbacks": true
+              "allow_fallbacks": true,
+              "require_parameters": true
             }
           }
         },
@@ -48,7 +56,8 @@
             "temperature": 0.1,
             "top_p": 0.9,
             "provider": {
-              "allow_fallbacks": true
+              "allow_fallbacks": true,
+              "require_parameters": true
             }
           }
         },
@@ -56,7 +65,8 @@
           "samplingParams": {
             "temperature": 0.0,
             "provider": {
-              "allow_fallbacks": true
+              "allow_fallbacks": true,
+              "require_parameters": true
             }
           }
         }
