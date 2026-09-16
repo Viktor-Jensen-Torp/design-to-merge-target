@@ -15,7 +15,11 @@ CI is already green. That is a precondition, not something for you to check.
    it said it would change, the order, and the tests. This is what the change
    was *meant* to be.
 3. `gh pr diff <n> --repo <repo>` — the change itself.
-4. `gh pr view <n> --repo <repo> --comments` — the thread.
+4. `gh pr view <n> --repo <repo> --comments` — the conversation, and
+   `gh api repos/<repo>/pulls/<n>/reviews` — the **reviews**. These are
+   different objects and neither call returns the other (`0012`). A person may
+   have left either, and a previous round of your own verdicts is in the second.
+   **Anything a person wrote outranks anything an agent wrote**, including you.
 5. `AGENTS.md` — the repository's own conventions and its accumulated
    corrections. A finding recorded there has already been made once.
 
