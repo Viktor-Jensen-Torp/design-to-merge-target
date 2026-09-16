@@ -196,6 +196,7 @@ jobs:
           sparse-checkout: |
             .agents
             .pi
+            scripts/pi-driver.py
           sparse-checkout-cone-mode: false
 
       - uses: actions/setup-node@v4
@@ -203,6 +204,49 @@ jobs:
           node-version: 22
       - name: Install Pi
         run: npm install -g @earendil-works/pi-coding-agent
+
+      # WHEN IS A REVIEW FINISHED?
+      #
+      # Not "a VERDICT comment exists" — on a rework round one already does,
+      # left by the previous review, so that check is green before this run
+      # starts and gates nothing (`NOTES.md` 27 is the same trap on the
+      # implementer). The verdict has to be about the commit under review.
+      #
+      # `.agents/reviewer.md` already requires the head SHA to be named in the
+      # verdict, so this asserts what the role file already asks for, and
+      # catches a reviewer that judged a commit that has since been pushed over.
+      - name: Define what a finished review means
+        env:
+          GH_TOKEN: ${{ steps.token.outputs.token }}
+          PR: ${{ needs.triage.outputs.number }}
+          REPO: ${{ github.repository }}
+        run: |
+          cat > "$RUNNER_TEMP/review-done.sh" <<'DONE'
+          set -u
+          J=$(gh pr view "$PR" --repo "$REPO" --json headRefOid,comments)
+          HEAD=$(jq -r '.headRefOid' <<< "$J")
+          LAST=$(jq -r '[.comments[].body | select(startswith("VERDICT:"))] | last // ""' <<< "$J")
+
+          if [ -z "$LAST" ]; then
+            echo "Pull request #$PR carries no VERDICT comment."
+            echo "The commit under review is $HEAD."
+            exit 1
+          fi
+          # Match on the abbreviated SHA. The role file asks for the head SHA
+          # and the model may write it short; any longer form contains this
+          # prefix, and a seven-hex prefix does not collide with the commit this
+          # branch had before. Being strict about the FORMAT here would fail
+          # reviews that were correct.
+          if ! grep -qF "${HEAD:0:7}" <<< "$LAST"; then
+            echo "The latest VERDICT on #$PR does not name the commit under review."
+            echo "  commit under review: $HEAD"
+            echo "  latest verdict:"
+            sed 's/^/    /' <<< "$LAST" | head -5
+            exit 1
+          fi
+          echo "A verdict naming $HEAD is posted."
+          DONE
+          chmod +x "$RUNNER_TEMP/review-done.sh"
 
       - name: Review the pull request
         env:
@@ -229,23 +273,54 @@ jobs:
           # fail silently here and two runs went out with none (`NOTES.md` 25).
           test -s .agents/reviewer.md \
             || { echo "::error::.agents/reviewer.md is missing or empty"; exit 1; }
+          test -s .agents/nudge-reviewer.md \
+            || { echo "::error::.agents/nudge-reviewer.md is missing or empty"; exit 1; }
+          test -x scripts/pi-driver.py \
+            || { echo "::error::scripts/pi-driver.py missing from the sparse checkout"; exit 1; }
           echo "role instructions: $(wc -c < .agents/reviewer.md) bytes"
 
-          pi --mode json --approve \
-             --append-system-prompt "$(cat .agents/reviewer.md)" \
-             --model "${{ vars.REVIEW_MODEL }}" \
-             --exclude-tools edit,write \
-             "Review pull request #$PR in $REPO, following .agents/reviewer.md.
+          cat > "$RUNNER_TEMP/prompt.md" <<PROMPT
+          Review pull request #$PR in $REPO, following .agents/reviewer.md.
 
           That file holds the passes to run, what counts as Important rather
           than a nit, the nit cap, what not to report, and the exact shape of
-          the verdict. Follow it rather than improvising a format."
+          the verdict. Follow it rather than improvising a format.
+          PROMPT
+
+          # The driver, for the same reason the other two roles have one: `pi`
+          # exits 0 when the task fails (`NOTES.md` 1), so a provider 429 or a
+          # model that thinks and says nothing used to leave this step green and
+          # the pull request silently unreviewed. The gatekeeper would then read
+          # an absent verdict as `unsure` and escalate — the right outcome by
+          # accident, arrived at without anyone knowing the review never ran.
+          python3 scripts/pi-driver.py \
+            --prompt-file "$RUNNER_TEMP/prompt.md" \
+            --nudge-file .agents/nudge-reviewer.md \
+            --done "bash $RUNNER_TEMP/review-done.sh" \
+            --max-nudges 2 \
+            --idle-timeout 600 \
+            --timeout 1500 \
+            --log "$RUNNER_TEMP/rpc.jsonl" \
+            -- pi --mode rpc --approve \
+                  --append-system-prompt "$(cat .agents/reviewer.md)" \
+                  --model "${{ vars.REVIEW_MODEL }}" \
+                  --exclude-tools edit,write
 
   # ── The authority. Serial, so two merges never race.
   gatekeep:
     needs: [triage, review]
-    if: needs.triage.outputs.number != '' && needs.triage.outputs.green == 'true'
-        && needs.triage.outputs.blocked != 'true'
+    # `!cancelled()`, because the reviewer's step can now FAIL rather than
+    # quietly producing nothing. Without it a failed review skips this job and
+    # the pull request is orphaned: no verdict, no label, nobody listening —
+    # the silent outcome ADR 0006 exists to forbid, reintroduced by the very
+    # change that made failures visible.
+    #
+    # With it, "Route on the verdict" finds no verdict, reads that as `unsure`,
+    # and labels `needs:human`. A review that could not run is a human's
+    # problem, and now says so.
+    if: ${{ !cancelled()
+        && needs.triage.outputs.number != '' && needs.triage.outputs.green == 'true'
+        && needs.triage.outputs.blocked != 'true' }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
     # No `concurrency: merge` here. ADR 0010 — `develop` requires a merge queue,
