@@ -231,6 +231,13 @@ jobs:
           # timeout as its only backstop. Both driver timeouts are set below the
           # job's 45 minutes so the driver, not the runner, reports the failure.
           #
+          # 2280s, not 2100s. Setup costs about three minutes and publishing
+          # about one, so 38 minutes is what is actually spare — and a run has
+          # already been killed with the work finished but uncommitted
+          # (`NOTES.md` 40). The real fix for that is in the role file: the
+          # gates passing is the end of the work. This only stops the clock
+          # being the thing that decides.
+          #
           # Everything the model says and every tool it calls is streamed to this
           # job's log as it happens.
           python3 scripts/pi-driver.py \
@@ -239,7 +246,7 @@ jobs:
             --done "bash $RUNNER_TEMP/done.sh" \
             --max-nudges 2 \
             --idle-timeout 600 \
-            --timeout 2100 \
+            --timeout 2280 \
             --log "$RUNNER_TEMP/rpc.jsonl" \
             -- pi --mode rpc --approve \
                   --append-system-prompt "$(cat .agents/implementer.md)" \

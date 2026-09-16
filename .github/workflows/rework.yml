@@ -237,7 +237,7 @@ jobs:
             --done "bash $RUNNER_TEMP/done.sh" \
             --max-nudges 2 \
             --idle-timeout 600 \
-            --timeout 2100 \
+            --timeout 2280 \
             --log "$RUNNER_TEMP/rpc.jsonl" \
             -- pi --mode rpc --approve \
                   --append-system-prompt "$(cat .agents/implementer.md)" \
