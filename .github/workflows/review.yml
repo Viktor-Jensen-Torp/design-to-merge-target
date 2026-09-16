@@ -49,6 +49,32 @@ jobs:
           app-id: ${{ vars.REVIEWER_APP_ID }}
           private-key: ${{ secrets.REVIEWER_APP_PRIVATE_KEY }}
 
+      # A CANCELLED CI run is not a red build. `ci.yml` cancels the run in
+      # flight when a new commit is pushed, so a perfectly good pull request
+      # whose author pushes twice in quick succession produces a cancelled run —
+      # and this workflow used to read "not success" as red, comment "CI is red",
+      # label `needs:rework` and spend a STRIKE on work that was never wrong
+      # (`NOTES.md` 37, found by the guard 2 spike).
+      #
+      # A cancellation means a newer run is already coming. The right move is to
+      # do nothing and let that run's chain decide — the same reasoning as guard
+      # 2 declining a stale verdict. `skipped` is the same case.
+      #
+      # This is the second time a cancelled run has been mistaken for a failed
+      # one (`NOTES.md` 33 was the first, on a release pull request's checks).
+      # The general form is worth keeping: **cancelled is not failed, and
+      # nothing in this pipeline should treat it as a verdict.**
+      - name: A cancelled run is not a red build
+        id: cancelled
+        run: |
+          C='${{ github.event.workflow_run.conclusion }}'
+          case "$C" in
+            cancelled|skipped)
+              echo "CI run was $C — a newer run is coming, nothing to decide here."
+              echo "stop=true" >> "$GITHUB_OUTPUT" ;;
+            *) echo "stop=false" >> "$GITHUB_OUTPUT" ;;
+          esac
+
       # A merge-group CI run that FAILED means the queue ejected this pull
       # request: it passed alone but not against the entries ahead of it. That
       # is the semantic conflict ADR 0010 adopted the queue to catch, and it is
@@ -65,7 +91,12 @@ jobs:
       # to avoid.
       - name: Ejected from the merge queue
         id: ejected
-        if: startsWith(github.event.workflow_run.head_branch, 'gh-readonly-queue/')
+        # Same reasoning as the step above, and the same bug it fixes: a
+        # merge-group run that is CANCELLED — the queue reordered, or the entry
+        # was removed — is not an ejection, and telling the implementer its
+        # change failed alongside the entries ahead of it would be false.
+        if: steps.cancelled.outputs.stop != 'true'
+          && startsWith(github.event.workflow_run.head_branch, 'gh-readonly-queue/')
         env:
           GH_TOKEN: ${{ steps.token.outputs.token }}
           REPO: ${{ github.repository }}
@@ -89,7 +120,8 @@ jobs:
       # indicating the PR that triggered the run, so it is not used here.
       - name: Find the pull request
         id: pr
-        if: "!startsWith(github.event.workflow_run.head_branch, 'gh-readonly-queue/')"
+        if: steps.cancelled.outputs.stop != 'true'
+          && !startsWith(github.event.workflow_run.head_branch, 'gh-readonly-queue/')
         env:
           GH_TOKEN: ${{ steps.token.outputs.token }}
           SHA: ${{ github.event.workflow_run.head_sha }}
