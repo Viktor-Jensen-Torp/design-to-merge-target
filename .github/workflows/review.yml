@@ -231,6 +231,7 @@ jobs:
             .agents
             .pi
             scripts/pi-driver.py
+            scripts/post-review.py
           sparse-checkout-cone-mode: false
 
       - uses: actions/setup-node@v4
@@ -310,6 +311,8 @@ jobs:
             || { echo "::error::.agents/nudge-reviewer.md is missing or empty"; exit 1; }
           test -x scripts/pi-driver.py \
             || { echo "::error::scripts/pi-driver.py missing from the sparse checkout"; exit 1; }
+          test -x scripts/post-review.py \
+            || { echo "::error::scripts/post-review.py missing from the sparse checkout"; exit 1; }
           echo "role instructions: $(wc -c < .agents/reviewer.md) bytes"
 
           cat > "$RUNNER_TEMP/prompt.md" <<PROMPT
