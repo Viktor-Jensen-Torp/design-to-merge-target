@@ -23,9 +23,33 @@ function capSlug(slug: string): string {
     return slug;
   }
   const truncated = slug.substring(0, MAX_SLUG_LENGTH);
-  const lastDashIndex = truncated.lastIndexOf("-");
-  if (lastDashIndex > 0) {
-    return truncated.substring(0, lastDashIndex);
+  // Find the last dash that serves as a word boundary.
+  // A word boundary dash has a letter before and after it,
+  // ensuring we cut between words rather than inside hyphenated words.
+  let wordBoundaryIndex = -1;
+  for (let i = truncated.length - 1; i >= 0; i--) {
+    if (truncated[i] !== "-") continue;
+    // Must have a letter before and after to be a word boundary
+    if (i === 0 || i === truncated.length - 1) continue;
+    const before = truncated.charCodeAt(i - 1);
+    const after = truncated.charCodeAt(i + 1);
+    if (before >= 97 && before <= 122 && after >= 97 && after <= 122) {
+      wordBoundaryIndex = i;
+      break;
+    }
+  }
+  if (wordBoundaryIndex > 0) {
+    const result = truncated.substring(0, wordBoundaryIndex);
+    // Ensure the result does not end with a trailing dash
+    if (result.endsWith("-")) {
+      return result.slice(0, -1);
+    }
+    return result;
+  }
+  // No word-boundary dash found; hard-cut at 60
+  // Ensure no trailing dash remains
+  if (truncated.endsWith("-")) {
+    return truncated.slice(0, -1);
   }
   return truncated;
 }
