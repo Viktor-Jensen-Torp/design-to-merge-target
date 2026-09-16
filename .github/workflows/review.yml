@@ -231,6 +231,7 @@ jobs:
             .agents
             .pi
             scripts/pi-driver.py
+            scripts/post-review.py
           sparse-checkout-cone-mode: false
 
       - uses: actions/setup-node@v4
@@ -310,6 +311,8 @@ jobs:
             || { echo "::error::.agents/nudge-reviewer.md is missing or empty"; exit 1; }
           test -x scripts/pi-driver.py \
             || { echo "::error::scripts/pi-driver.py missing from the sparse checkout"; exit 1; }
+          test -x scripts/post-review.py \
+            || { echo "::error::scripts/post-review.py missing from the sparse checkout"; exit 1; }
           echo "role instructions: $(wc -c < .agents/reviewer.md) bytes"
 
           cat > "$RUNNER_TEMP/prompt.md" <<PROMPT
@@ -442,8 +445,14 @@ jobs:
           # `0012`: the verdict is a REVIEW. Two fields, both recorded by
           # GitHub — `state` is the decision and `commit_id` is what was judged.
           # Nothing here parses prose a model wrote.
-          R=$(gh api "repos/$REPO/pulls/$PR/reviews" \
-                --jq '[.[] | select(.state != "PENDING")] | last // empty')
+          #
+          # `0013`: the last review **by the reviewer App**, not by anyone. A
+          # person leaving a COMMENTED review must not silently become the
+          # verdict, and a person approving must not become one either —
+          # approving is not how a human authorises a merge here (`0005`).
+          REVIEWS=$(gh api "repos/$REPO/pulls/$PR/reviews")
+          R=$(jq -c '[.[] | select(.state != "PENDING")
+                          | select(.user.login | endswith("[bot]"))] | last // empty' <<< "$REVIEWS")
           # `${R:-null}`, not `${R:-{}}` — the closing brace inside the default
           # terminates the expansion early and jq gets malformed input. `null`
           # is valid JSON and `.state // ""` on it gives the empty string.
@@ -455,6 +464,45 @@ jobs:
             COMMENTED)         V=unsure ;;
             *)                 V="" ;;
           esac
+
+          # ── ADR 0013. A human who has written on this pull request since the
+          # verdict stops the merge, whatever they said. "Looks good to me"
+          # blocks exactly as "wait, don't" does: a machine that decides which
+          # human remarks are approvals has to interpret them, and interpreting
+          # is the thing that goes wrong.
+          #
+          # The test is the AUTHOR, not the words. Bot comments — `in-develop`,
+          # the escalation notices, this job's own messages — must not count, or
+          # the rule deadlocks on its own output.
+          if [ -n "$R" ]; then
+            SINCE=$(jq -r '.submitted_at' <<< "$R")
+            HUMANS=$(jq -r --arg since "$SINCE" '
+                       [.[] | select(.state != "PENDING")
+                            | select((.user.login | endswith("[bot]")) | not)
+                            | select(.submitted_at > $since)
+                            | "review (" + .state + ") by " + .user.login] | .[]' <<< "$REVIEWS")
+            # Piped to jq, not `gh api --jq`: gh's built-in filter takes no
+            # `--arg`, so `--jq --arg since ...` parses as the filter being the
+            # literal string "--arg". It would have failed loudly here, but only
+            # because the filter was then invalid — a subtler one would have
+            # silently matched nothing.
+            HUMANC=$(gh api "repos/$REPO/issues/$PR/comments" \
+                     | jq -r --arg since "$SINCE" '
+                         [.[] | select((.user.login | endswith("[bot]")) | not)
+                              | select(.created_at > $since)
+                              | "comment by " + .user.login] | .[]' 2>/dev/null || true)
+            WHO=$(printf '%s\n%s\n' "$HUMANS" "$HUMANC" | grep -v '^$' || true)
+            if [ -n "$WHO" ]; then
+              gh pr edit "$PR" --repo "$REPO" --add-label needs:human
+              gh pr ready "$PR" --repo "$REPO"
+              printf '%s\n\n%s\n' \
+                "Not merging: a person has written on this pull request since the reviewer's verdict, so it is theirs to finish (ADR 0013)." \
+                "$WHO" > "$RUNNER_TEMP/human.md"
+              gh pr comment "$PR" --repo "$REPO" --body-file "$RUNNER_TEMP/human.md"
+              echo "go=false" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+          fi
 
           # ── ADR 0009, guard 2. A verdict is about one commit. If the branch
           # has been pushed to since the reviewer read it, this verdict says

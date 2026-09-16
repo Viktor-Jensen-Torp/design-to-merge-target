@@ -115,14 +115,31 @@ jobs:
           REPO: ${{ github.repository }}
           TASK: ${{ steps.count.outputs.task }}
         run: |
+          # The findings are in REVIEWS, not comments. `0012` moved the verdict
+          # into a pull request review, and `gh pr view --json comments` does not
+          # return review bodies — so this step handed the agent an empty
+          # findings section, it had nothing to act on, and the run was wasted
+          # and escalated (`NOTES.md` 39). Both are read: the reviews carry the
+          # findings, the comments carry everything a human or another job said.
           {
             echo "## The pull request"
             gh pr view "$PR" --repo "$REPO" --json title,body -q '.title + "\n\n" + .body'
             echo
-            echo "## The review thread"
+            echo "## The reviews"
+            gh api "repos/$REPO/pulls/$PR/reviews" \
+              --jq '.[] | select(.state != "PENDING")
+                    | "— " + .user.login + " (" + .state + ", on " + .commit_id[0:7] + "):\n" + (.body // "(no body)")'
+            echo
+            echo "## The thread"
             gh pr view "$PR" --repo "$REPO" --json comments \
               -q '.comments[] | "— " + .author.login + ":\n" + .body'
           } > "$RUNNER_TEMP/context.md"
+
+          # Assert it. An empty context file is how this failed the first time,
+          # and it looked exactly like an agent that would not work.
+          test -s "$RUNNER_TEMP/context.md" \
+            || { echo "::error::the context file is empty — refusing to rework with no brief"; exit 1; }
+          echo "context: $(wc -c < "$RUNNER_TEMP/context.md") bytes"
 
           if [ "$TASK" = "resolve-conflict" ]; then
             git fetch origin develop
@@ -138,7 +155,7 @@ jobs:
               gh run view "$RUN" --repo "$REPO" --log-failed >> "$RUNNER_TEMP/context.md" 2>/dev/null || true
               echo "task=Make CI pass. The failing job log is in the context file." >> "$GITHUB_OUTPUT"
             else
-              echo "task=Address the reviewer's findings in the review thread." >> "$GITHUB_OUTPUT"
+              echo "task=Address the findings in the reviews." >> "$GITHUB_OUTPUT"
             fi
           fi
 
@@ -162,6 +179,7 @@ jobs:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           PR: ${{ github.event.pull_request.number }}
           REPO: ${{ github.repository }}
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
         run: |
           # Same role, same skill file. Only the task differs — this is not a
           # second implementer with its own instructions to drift from the first.
@@ -169,34 +187,104 @@ jobs:
           # fail silently here and two runs went out with none (`NOTES.md` 25).
           test -s .agents/implementer.md \
             || { echo "::error::.agents/implementer.md is missing or empty"; exit 1; }
+          test -s .agents/nudge-implementer.md \
+            || { echo "::error::.agents/nudge-implementer.md is missing or empty"; exit 1; }
+          test -x scripts/pi-driver.py \
+            || { echo "::error::scripts/pi-driver.py is missing"; exit 1; }
+          python3 --version >/dev/null \
+            || { echo "::error::no python3 for the driver"; exit 1; }
           echo "role instructions: $(wc -c < .agents/implementer.md) bytes"
 
-          pi --mode json --approve \
-             --append-system-prompt "$(cat .agents/implementer.md)" \
-             --model "${{ vars.IMPLEMENT_MODEL }}" \
-             "You are reworking pull request #$PR in $REPO, following
+          cat > "$RUNNER_TEMP/prompt.md" <<PROMPT
+          You are reworking pull request #$PR in $REPO, following
           .agents/implementer.md.
 
           ${{ steps.ctx.outputs.task }}
 
-          Everything you need — the plan, the review thread, and any failing job
-          log — is in $RUNNER_TEMP/context.md. Read it first.
+          Everything you need — the plan, the reviews, and any failing job log —
+          is in $RUNNER_TEMP/context.md. Read it first.
 
           Commit your work. Do not push; the workflow does that. If the plan in
-          the pull request body is now wrong, say so in your final message." \
-             | tee "$RUNNER_TEMP/pi.jsonl"
+          the pull request body is now wrong, say so in your final message.
+          PROMPT
 
-      # pi exits 0 on a failed task (NOTES.md section 1). Assert on the repo.
-      - name: Assert something changed
+          # WHEN IS A REWORK FINISHED? A clean tree AND a commit beyond what is
+          # already on the remote branch. "Clean tree" alone is true the moment
+          # the job checks out, so on its own it gates nothing (`NOTES.md` 27).
+          cat > "$RUNNER_TEMP/done.sh" <<'DONE'
+          # Asking for a human is a valid ending, not a failure — see
+          # implement.yml. An agent that has decided it needs a decision it is
+          # not allowed to make must not be nudged twice and then failed.
+          if [ -s "$RUNNER_TEMP/needs-human.md" ]; then
+            echo "The agent asked for a human."
+            exit 0
+          fi
+          st=$(git status --porcelain)
+          ahead=$(git rev-list --count "origin/$HEAD_REF"..HEAD)
+          [ -n "$st" ] && { echo "Uncommitted changes in the working tree:"; echo "$st"; }
+          [ "$ahead" = 0 ] && echo "No new commits beyond origin/$HEAD_REF — the rework produced nothing yet."
+          [ -z "$st" ] && [ "$ahead" -gt 0 ]
+          DONE
+
+          # The driver, for the reason the other three roles have one and this
+          # one did not. On 2026-09-16 the rework agent stopped without
+          # committing, `pi` exited 0, and "Assert something changed" caught it
+          # afterwards — which costs the whole run and escalates a pull request
+          # that only needed another turn (`NOTES.md` 39).
+          python3 scripts/pi-driver.py \
+            --prompt-file "$RUNNER_TEMP/prompt.md" \
+            --nudge-file .agents/nudge-implementer.md \
+            --done "bash $RUNNER_TEMP/done.sh" \
+            --max-nudges 2 \
+            --idle-timeout 600 \
+            --timeout 2100 \
+            --log "$RUNNER_TEMP/rpc.jsonl" \
+            -- pi --mode rpc --approve \
+                  --append-system-prompt "$(cat .agents/implementer.md)" \
+                  --model "${{ vars.IMPLEMENT_MODEL }}"
+
+      # "Assert something changed" used to live here, running the same check
+      # after the fact. The driver now runs it while the agent can still act on
+      # it, and a check written in two places is a check that will eventually
+      # disagree with itself.
+
+      # The implementer's escalate verb, on a pull request rather than an issue.
+      # `0006`: silence is never an outcome. An agent that stops deliberately
+      # and one that breaks used to be indistinguishable here too.
+      - name: Did the agent ask for a human?
+        id: askhuman
         if: steps.count.outputs.stop == 'false'
         run: |
-          if git diff --quiet "origin/${{ github.event.pull_request.head.ref }}"..HEAD; then
-            echo "No new commits — the rework produced nothing."
-            exit 1
+          if [ -s "$RUNNER_TEMP/needs-human.md" ]; then
+            echo "asked=true" >> "$GITHUB_OUTPUT"
+            echo "the agent asked for a human: $(wc -c < "$RUNNER_TEMP/needs-human.md") bytes"
+          else
+            echo "asked=false" >> "$GITHUB_OUTPUT"
           fi
 
+      - name: Hand it to a human
+        if: steps.askhuman.outputs.asked == 'true'
+        env:
+          GH_TOKEN: ${{ steps.token.outputs.token }}
+          PR: ${{ github.event.pull_request.number }}
+          REPO: ${{ github.repository }}
+          RUN: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          {
+            echo "The implementer stopped reworking this and asked for a human. Its reason:"
+            echo
+            sed 's/^/> /' "$RUNNER_TEMP/needs-human.md"
+            echo
+            echo "A deliberate stop, not a failed run — it spends no strike. $RUN"
+          } > "$RUNNER_TEMP/handover.md"
+          gh pr comment "$PR" --repo "$REPO" --body-file "$RUNNER_TEMP/handover.md"
+          gh pr edit "$PR" --repo "$REPO" --add-label needs:human --remove-label needs:rework
+          gh pr ready "$PR" --repo "$REPO" || true
+          echo "pull request #$PR -> needs:human"
+
       - name: Publish
-        if: steps.count.outputs.stop == 'false'
+        if: steps.count.outputs.stop == 'false' && steps.askhuman.outputs.asked != 'true'
         env:
           GH_TOKEN: ${{ steps.token.outputs.token }}
           PR: ${{ github.event.pull_request.number }}

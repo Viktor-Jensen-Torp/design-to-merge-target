@@ -199,6 +199,13 @@ jobs:
           # This script's OUTPUT is what the agent is shown when it stops early,
           # so it reports state rather than repeating the role file.
           cat > "$RUNNER_TEMP/done.sh" <<'DONE'
+          # Asking for a human is a valid ending, not a failure. Without this
+          # the driver would nudge an agent that had already decided it needed a
+          # decision it is not allowed to make, twice, and then go red.
+          if [ -s "$RUNNER_TEMP/needs-human.md" ]; then
+            echo "The agent asked for a human."
+            exit 0
+          fi
           st=$(git status --porcelain)
           ahead=$(git rev-list --count origin/develop..HEAD)
           [ -n "$st" ] && { echo "Uncommitted changes in the working tree:"; echo "$st"; }
@@ -248,6 +255,45 @@ jobs:
             exit 1
           fi
 
+      # ADR 0006 says silence is never an outcome for the reviewer. The same has
+      # to be true of an implementer that decides it is out of its depth — and
+      # until now it had no verb for that: only a FAILED run escalated, so an
+      # agent that stopped deliberately and an agent that broke looked the same.
+      #
+      # The reason goes in a COMMENT, next to the label. A person should arrive
+      # at the agent's reasoning, not at a job whose logs they have to open —
+      # and logs expire.
+      - name: Did the agent ask for a human?
+        id: askhuman
+        run: |
+          if [ -s "$RUNNER_TEMP/needs-human.md" ]; then
+            echo "asked=true" >> "$GITHUB_OUTPUT"
+            echo "the agent asked for a human: $(wc -c < "$RUNNER_TEMP/needs-human.md") bytes"
+          else
+            echo "asked=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Hand it to a human
+        if: steps.askhuman.outputs.asked == 'true'
+        env:
+          GH_TOKEN: ${{ steps.token.outputs.token }}
+          N: ${{ github.event.issue.number }}
+          REPO: ${{ github.repository }}
+          RUN: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          {
+            echo "The implementer stopped and asked for a human. Its reason:"
+            echo
+            sed 's/^/> /' "$RUNNER_TEMP/needs-human.md"
+            echo
+            echo "No pull request was opened. This is a deliberate stop, not a failed"
+            echo "run — it spends no attempt. $RUN"
+          } > "$RUNNER_TEMP/handover.md"
+          gh issue comment "$N" --repo "$REPO" --body-file "$RUNNER_TEMP/handover.md"
+          gh issue edit "$N" --repo "$REPO" --add-label needs:human --remove-label ready-to-develop
+          echo "issue #$N -> needs:human"
+
       # There is deliberately no "assert the agent did something" step here any
       # more. It used to re-run `git diff --quiet origin/develop..HEAD` and grep
       # the JSON stream for a stop reason. The driver's done.sh is now that
@@ -265,6 +311,7 @@ jobs:
           retention-days: 7
 
       - name: Publish the work
+        if: steps.askhuman.outputs.asked != 'true'
         env:
           GH_TOKEN: ${{ steps.token.outputs.token }}
           N: ${{ github.event.issue.number }}

@@ -60,7 +60,29 @@ Three things change:
 The issue's acceptance criteria are met and the working tree is clean. Do not
 push. Do not open a pull request. Do not merge anything.
 
-If you cannot finish — the issue is wrong, it needs a dependency change
-(`0002`), or it is bigger than it looks — stop and say so plainly in your final
-message. Stopping with a clear reason is a good outcome. Inventing your way
-around a gate you cannot satisfy is not.
+## When you cannot finish
+
+Stopping with a clear reason is a good outcome. Inventing your way around a gate
+you cannot satisfy is not.
+
+But your final message is read by nobody. **Write the reason to
+`$RUNNER_TEMP/needs-human.md` and stop.** The workflow posts it as a comment and
+labels the issue `needs:human`, so a person arrives at your reasoning rather
+than at a failed job they have to open the logs of.
+
+That file is a **valid ending**, exactly as a clean tree and a commit are. It
+does not count as a failure and does not spend an attempt.
+
+Use it when:
+
+- the issue is wrong, ambiguous, or contradicts the code;
+- it needs a dependency change (`0002`), which is human work;
+- it is bigger than one issue and should be split;
+- a gate refuses something you believe is correct, and you would have to weaken
+  the gate to proceed.
+
+Say what you found, what you tried, and what you think should happen. One or two
+paragraphs. The person reading it has not seen anything you have seen.
+
+**Do not write it instead of doing work you can do.** It is for the cases where
+finishing would require a decision that is not yours.
