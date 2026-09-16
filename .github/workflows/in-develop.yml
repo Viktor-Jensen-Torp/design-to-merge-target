@@ -1,4 +1,5 @@
-# Applies `in:develop` to every issue a merged pull request closes.
+# Applies `in:develop` to every issue a merged pull request closes — and undoes
+# that when a pull request REVERTS one.
 #
 # ADR 0011: `Done` means merged to `main`. The middle state — merged to
 # `develop`, awaiting release — has to be readable by a human, by a Project view
@@ -13,6 +14,13 @@
 # it does not even record the link, so `closingIssuesReferences` is empty for a
 # pull request into `develop` (`NOTES.md` section 19). Nothing native survives
 # here; the parse is the only source.
+#
+# The revert half exists because ADR 0011 promises it and nothing implemented
+# it. `0011` says a rejected issue is reverted rather than held, and that "the
+# issue reopens, with the objection as a comment". Until 2026-09-16 no workflow
+# watched for a revert, so the code went away and the issue kept `in:develop`
+# and stayed closed-looking forever: work silently lost, which is this project's
+# signature failure (`NOTES.md` 34).
 name: in-develop
 
 on:
@@ -92,4 +100,120 @@ jobs:
             gh issue view "$N" --json labels -q '[.labels[].name]|join(",")' \
               | grep -q 'in:develop' \
               || { echo "::error::issue #$N did not take the in:develop label"; exit 1; }
+          done
+
+  # ── A revert puts the issue back in play.
+  #
+  # After `label`, not beside it. Both edit labels on the same issue, and a
+  # revert pull request that happens to carry a `Closes #n` would otherwise have
+  # one job adding `in:develop` while the other removes it, with the winner
+  # decided by scheduling.
+  unrevert:
+    needs: label
+    if: >-
+      github.event.pull_request.merged == true &&
+      github.event.pull_request.base.ref == 'develop'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/create-github-app-token@v2
+        id: token
+        with:
+          app-id: ${{ vars.RELEASER_APP_ID }}
+          private-key: ${{ secrets.RELEASER_APP_PRIVATE_KEY }}
+
+      - name: Reopen every issue this pull request reverted
+        env:
+          GH_TOKEN: ${{ steps.token.outputs.token }}
+          PR: ${{ github.event.pull_request.number }}
+          RUN: ${{ github.server_url }}/${{ github.repository }}/pull/${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+
+          J=$(gh pr view "$PR" --json body,commits)
+
+          # Two ways in, because one of them does not depend on anyone
+          # remembering anything.
+          #
+          # 1. `git revert` writes "This reverts commit <sha>." into the commit
+          #    body itself. Machine-written, so it is there whatever the author
+          #    called the pull request. Each sha maps back to its pull request
+          #    through the commits API.
+          # 2. `Reverts #n` in the body, for a hand-written undo that is not a
+          #    literal `git revert` — a follow-up that removes the feature by
+          #    other means still needs the issue reopened.
+          SHAS=$(jq -r '[.commits[].messageBody // ""] | join("\n")' <<< "$J" \
+                 | grep -oE 'This reverts commit [0-9a-f]{7,40}' \
+                 | grep -oE '[0-9a-f]{7,40}' | sort -u || true)
+          # The `|| true` is load-bearing — grep exits 1 when it matches
+          # nothing, and most pull requests revert nothing (`NOTES.md` 24).
+
+          REVERTED=""
+          for SHA in $SHAS; do
+            N=$(gh api "repos/{owner}/{repo}/commits/$SHA/pulls" \
+                  --jq '.[].number' 2>/dev/null | head -1 || true)
+            if [ -n "$N" ]; then REVERTED="$REVERTED $N"; fi
+          done
+
+          FROM_BODY=$(jq -r '.body // ""' <<< "$J" \
+                      | awk '/^[[:space:]]*```/{f=!f; next} !f' \
+                      | grep -oiE 'revert(s|ed)?[[:space:]]+#[0-9]+' \
+                      | grep -oE '[0-9]+' | sort -un || true)
+          REVERTED=$(printf '%s %s' "$REVERTED" "$FROM_BODY" \
+                     | tr ' ' '\n' | grep -E '^[0-9]+$' | sort -un || true)
+
+          if [ -z "$REVERTED" ]; then
+            echo "pull request #$PR reverts nothing"
+            exit 0
+          fi
+          echo "reverts: $(echo $REVERTED | tr '\n' ' ')"
+
+          parse_closes() {
+            awk '/^[[:space:]]*```/{f=!f; next} !f' \
+            | grep -oiE '(close[sd]?|fix(e[sd])?|resolve[sd]?)[[:space:]]+#[0-9]+' \
+            | grep -oE '[0-9]+' | sort -un || true
+          }
+
+          # A reverted pull request's issues, by the same two routes the label
+          # job uses: the body, and the agent branch name.
+          ISSUES=""
+          for P in $REVERTED; do
+            FOUND=$(gh pr view "$P" --json body -q .body 2>/dev/null | parse_closes || true)
+            HEAD=$(gh pr view "$P" --json headRefName -q .headRefName 2>/dev/null || true)
+            case "$HEAD" in agent/issue-*) FOUND="$FOUND ${HEAD##*issue-}" ;; esac
+            ISSUES="$ISSUES $FOUND"
+          done
+          ISSUES=$(printf '%s' "$ISSUES" | tr ' ' '\n' | grep -E '^[0-9]+$' | sort -un || true)
+
+          if [ -z "$ISSUES" ]; then
+            echo "::warning::#$PR reverts pull requests that close no issue — nothing to reopen"
+            exit 0
+          fi
+
+          for N in $ISSUES; do
+            gh issue reopen "$N" 2>/dev/null || true
+
+            # `needs:human`, NOT `ready-to-develop`. ADR 0011 says the issue
+            # reopens; it does not say it goes straight back to an agent, and
+            # sending it back unchanged would produce the same work that was
+            # just rejected. A revert is a human's decision, so the next move is
+            # a human's too — they re-label when the issue has been re-scoped.
+            STALE=$(gh issue view "$N" --json labels \
+                      -q '[.labels[].name
+                           | select(. == "in:develop" or . == "ready-to-develop")]
+                          | join(",")')
+            if [ -n "$STALE" ]; then
+              gh issue edit "$N" --remove-label "$STALE"
+            fi
+            gh issue edit "$N" --add-label needs:human
+            gh issue comment "$N" --body \
+              "Reverted on \`develop\` by $RUN. The work is no longer in the branch and this issue is open again. Re-scope it and re-label \`ready-to-develop\` when it is ready to be attempted; the objection should be on the reverting pull request."
+            echo "issue #$N -> reopened, needs:human"
+          done
+
+          # Assert it. A reopen that silently failed leaves work that shipped,
+          # was pulled, and is now tracked nowhere.
+          for N in $ISSUES; do
+            [ "$(gh issue view "$N" --json state -q .state)" = "OPEN" ] \
+              || { echo "::error::issue #$N is still closed after its work was reverted"; exit 1; }
           done
