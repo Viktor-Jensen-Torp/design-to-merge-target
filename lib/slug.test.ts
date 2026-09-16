@@ -36,4 +36,7 @@ describe("slugify", () => {
   it("keeps digits", () => {
     expect(slugify("Room 101")).toBe("room-101");
   });
+  it("keeps digits", () => {
+    expect(slugify("Room 101")).toBe("room-101");
+  });
 });
