@@ -28,6 +28,7 @@ Exit codes
   2  timed out (no events for --idle-timeout, or --timeout total)
   3  Pi died, or spoke something that was not the protocol
   4  bad usage
+  5  the provider kept failing past --max-retries
 
 Framing
 -------
@@ -73,6 +74,26 @@ class Framer:
         return out
 
 
+def tool_error_text(ev):
+    """The error a failed tool handed back, as one short line.
+
+    `tool_execution_end.result` is whatever the tool returned, so this reads the
+    documented shapes and falls back to a truncated dump rather than guessing.
+    """
+    r = ev.get("result")
+    if isinstance(r, dict):
+        parts = r.get("content")
+        if isinstance(parts, list):
+            text = " ".join(
+                str(c.get("text", "")) for c in parts if isinstance(c, dict)
+            ).strip()
+            if text:
+                return text[:400].replace("\n", " ⏎ ")
+        if r.get("error"):
+            return str(r["error"])[:400]
+    return (json.dumps(r) if r is not None else "(no result)")[:400]
+
+
 def run_check(cmd, cwd):
     p = subprocess.run(
         ["bash", "-c", cmd],
@@ -94,6 +115,13 @@ def main():
         required=True,
         help="shell command; exit 0 means the role is finished. "
         'e.g. \'test -z "$(git status --porcelain)"\'',
+    )
+    ap.add_argument(
+        "--max-retries",
+        type=int,
+        default=6,
+        help="give up after this many provider auto-retries. Without a ceiling "
+        "a failing provider burns the whole --timeout budget in silence.",
     )
     ap.add_argument(
         "--nudge-file",
@@ -162,6 +190,9 @@ def main():
     started = time.time()
     last_event = time.time()
     nudges = 0
+    retries = 0
+    tool_errors = 0
+    stop_reasons = []
     verdict = None
     tools = []
     streaming_text = False
@@ -239,10 +270,37 @@ def main():
                     log(f"  · {name}{detail}")
 
                 elif t == "tool_execution_end" and ev.get("isError"):
-                    log(f"  ! {ev.get('toolName')} failed")
+                    # The agent sees this text and we did not, which is how a
+                    # command that failed for a fixable reason — a missing
+                    # binary, a wrong path — looked from the outside exactly
+                    # like a model that had stopped trying (`NOTES.md` 38).
+                    log(f"  ! {ev.get('toolName')} failed: {tool_error_text(ev)}")
+                    tool_errors += 1
+
+                elif t == "message_end":
+                    # `stopReason` is the model's own account of why it stopped.
+                    # "length" means the reply was truncated mid-thought, which
+                    # is indistinguishable from a finished one in the text —
+                    # and "error"/"aborted" mean the turn did not happen at all.
+                    reason = (ev.get("message") or {}).get("stopReason")
+                    if reason and reason not in ("stop", "toolUse"):
+                        log(f"  ! turn ended on stopReason={reason}")
+                        stop_reasons.append(reason)
 
                 elif t == "auto_retry_start":
-                    log("  ~ auto-retry (transient provider error)")
+                    retries += 1
+                    log(f"  ~ auto-retry {retries}/{args.max_retries} (transient provider error)")
+                    if retries > args.max_retries:
+                        # Without this the run sits here until --timeout fires,
+                        # spending the whole budget learning nothing. A provider
+                        # that has failed this many times will not recover
+                        # inside one job.
+                        log(
+                            f"pi-driver: {retries} provider retries is past "
+                            f"--max-retries {args.max_retries}. Giving up."
+                        )
+                        verdict = 5
+                        break
 
                 elif t == "compaction_start":
                     log("  ~ compacting context")
@@ -305,7 +363,17 @@ def main():
         for n in tools:
             counts[n] = counts.get(n, 0) + 1
         log("pi-driver: tools used — " + ", ".join(f"{k}×{v}" for k, v in counts.items()))
-    log(f"pi-driver: exit {verdict} after {int(time.time() - started)}s, {nudges} nudge(s)")
+    # Everything the job log needs to tell a bad run from a slow one, on one
+    # line. The three parallel runs on 2026-09-16 each had all of this and none
+    # of it was written down, so the only symptom was the wall clock.
+    health = [f"{nudges} nudge(s)"]
+    if retries:
+        health.append(f"{retries} provider retr{'y' if retries == 1 else 'ies'}")
+    if tool_errors:
+        health.append(f"{tool_errors} tool error(s)")
+    if stop_reasons:
+        health.append("stopReason " + ",".join(sorted(set(stop_reasons))))
+    log(f"pi-driver: exit {verdict} after {int(time.time() - started)}s, " + ", ".join(health))
     return verdict if verdict is not None else 3
 
 

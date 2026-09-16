@@ -1,0 +1,37 @@
+{
+  "_comment": [
+    "Goes in the TARGET repo at .pi/settings.json.",
+    "",
+    "`0008` says project KNOWLEDGE never lives here — that belongs in AGENTS.md,",
+    "which every harness reads. These are runtime knobs for Pi as a caller, which",
+    "is exactly what `0008` says this file is for.",
+    "",
+    "Project settings need project trust. In non-interactive mode there is no",
+    "prompt, so the workflows pass `--approve`. Until this file existed that flag",
+    "was a no-op (`security.md`: a bare `.pi` directory is not a project resource).",
+    "It now does something."
+  ],
+
+  "retry": {
+    "enabled": true,
+    "maxRetries": 3,
+    "baseDelayMs": 2000,
+    "provider": {
+      "maxRetries": 0,
+      "maxRetryDelayMs": 30000
+    }
+  },
+
+  "httpIdleTimeoutMs": 180000,
+
+  "defaultTools": ["read", "bash", "edit", "write", "grep", "find", "ls"],
+
+  "compaction": {
+    "enabled": true,
+    "reserveTokens": 16384,
+    "keepRecentTokens": 20000
+  },
+
+  "enableInstallTelemetry": false,
+  "enableAnalytics": false
+}

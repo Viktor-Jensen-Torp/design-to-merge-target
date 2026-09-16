@@ -1,0 +1,62 @@
+{
+  "_comment": [
+    "Goes in the TARGET repo at .pi/models.json.",
+    "",
+    "WHY THIS FILE EXISTS. Until 2026-09-16 the pipeline sent no sampling",
+    "parameters at all. Pi only sends them when something defines them, and",
+    "OpenRouter does not substitute a default \u2014 it omits the parameter upstream",
+    "and whichever provider serves the request applies its own. A `:free` model",
+    "routes across several providers, so the sampling that produced any given",
+    "token was chosen by whoever answered, and a retry can land somewhere else.",
+    "That is `NOTES.md` 43, and it is the leading candidate for the token soup",
+    "in `NOTES.md` 38.",
+    "",
+    "`samplingParams` is merged VERBATIM into the request body and its keys win",
+    "(`models.md`), so it carries both the sampling AND OpenRouter's top-level",
+    "`provider` routing block. One field, both hypotheses.",
+    "",
+    "UNVERIFIED, deliberately: OpenRouter warns that sending values explicitly",
+    "can affect provider-side cache keys, and its documentation says nothing",
+    "about how provider routing interacts with `:free` variants. We are finding",
+    "out by running it. If this file makes things worse, delete it \u2014 that is a",
+    "result, not a setback.",
+    "",
+    "No `sort`. Sorting by throughput selects the fastest node, which is also how you find a heavily quantised one \u2014 the opposite of what we are testing. `require_parameters: true` restricts routing to providers that actually honour the sampling we send, which is the point of sending it."
+  ],
+  "providers": {
+    "openrouter": {
+      "modelOverrides": {
+        "nvidia/nemotron-3.5-lightning:free": {
+          "samplingParams": {
+            "temperature": 0.2,
+            "top_p": 0.9,
+            "provider": {
+              "allow_fallbacks": true,
+              "require_parameters": true
+            }
+          }
+        },
+        "thinkingmachines/inkling:free": {
+          "samplingParams": {
+            "temperature": 0.1,
+            "top_p": 0.9,
+            "provider": {
+              "allow_fallbacks": true,
+              "require_parameters": true
+            }
+          }
+        },
+        "poolside/laguna-s-2.1:free": {
+          "samplingParams": {
+            "temperature": 0.0,
+            "top_p": 1.0,
+            "provider": {
+              "allow_fallbacks": true,
+              "require_parameters": true
+            }
+          }
+        }
+      }
+    }
+  }
+}
