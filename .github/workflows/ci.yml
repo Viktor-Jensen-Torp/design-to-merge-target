@@ -38,6 +38,36 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v5
+
+      # ADR 0004 names this failure in its own consequences and then did not
+      # guard it: `review.yml` triggers on `workflow_run` matching this
+      # workflow's `name:` LITERALLY. Rename one without the other and every
+      # review in the pipeline stops firing — with nothing red, nothing
+      # logged, and no pull request left unmerged to notice. `CLAUDE.md`: assert
+      # every gate, never assume one.
+      #
+      # It runs in `quality` rather than as its own job because `quality` is
+      # already required on `develop` and already runs on `merge_group`. A new
+      # job would have to be added to both or it would be a gate that does not
+      # gate.
+      - name: The reviewer's trigger still names this workflow
+        run: |
+          set -euo pipefail
+          HERE=$(sed -n 's/^name:[[:space:]]*//p' .github/workflows/ci.yml | head -1)
+          WANT=$(grep -oE 'workflows:[[:space:]]*\["[^"]+"\]' .github/workflows/review.yml \
+                 | head -1 | sed -E 's/.*\["([^"]+)"\].*/\1/')
+
+          # Either side coming back empty means the parse broke, not that the
+          # names agree. An assertion that cannot fail is worse than none.
+          test -n "$HERE" || { echo "::error::could not read name: from ci.yml"; exit 1; }
+          test -n "$WANT" || { echo "::error::could not read the workflow_run trigger from review.yml"; exit 1; }
+
+          if [ "$HERE" != "$WANT" ]; then
+            echo "::error::review.yml waits for a workflow called '$WANT', this one is called '$HERE'."
+            echo "::error::The reviewer would never fire, and would never say so (ADR 0004)."
+            exit 1
+          fi
+          echo "reviewer trigger matches: '$HERE'"
       - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v4
         with:
