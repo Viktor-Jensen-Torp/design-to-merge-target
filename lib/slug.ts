@@ -22,10 +22,13 @@ function capSlug(slug: string): string {
   if (slug.length <= MAX_SLUG_LENGTH) {
     return slug;
   }
+  // Truncate to max length first
   const truncated = slug.substring(0, MAX_SLUG_LENGTH);
   // Find the last dash that serves as a word boundary.
-  // A word boundary dash has a letter before and after it,
+  // A word boundary dash has a lowercase letter before and after it,
   // ensuring we cut between words rather than inside hyphenated words.
+  // Digits (charCode 48-57) are excluded so dashes like 'a-1' are not treated
+  // as word boundaries.
   let wordBoundaryIndex = -1;
   for (let i = truncated.length - 1; i >= 0; i--) {
     if (truncated[i] !== "-") continue;
