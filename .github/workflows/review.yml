@@ -5,7 +5,9 @@
 # before CI finishes, and the conclusion is in the event.
 #
 # ADR 0006 shapes the jobs: the reviewer returns a verdict and holds no
-# authority; a separate gatekeeper merges or escalates. Two jobs rather than two
+# authority; a separate gatekeeper merges or escalates. ADR 0012 says what a
+# verdict is MADE OF: a GitHub review, whose `state` is the decision and whose
+# `commit_id` is the commit judged. Nothing here parses a verdict out of prose. Two jobs rather than two
 # workflows, deliberately — each still gets its own App, model and skill file,
 # but there is no second trigger to misfire and no extra link in a workflow_run
 # chain (which caps at three levels, NOTES.md section 7).
@@ -239,14 +241,14 @@ jobs:
 
       # WHEN IS A REVIEW FINISHED?
       #
-      # Not "a VERDICT comment exists" — on a rework round one already does,
-      # left by the previous review, so that check is green before this run
-      # starts and gates nothing (`NOTES.md` 27 is the same trap on the
-      # implementer). The verdict has to be about the commit under review.
+      # Not "a review exists" — on a rework round one already does, left by the
+      # previous round, so that check is green before this run starts and gates
+      # nothing (`NOTES.md` 27 is the same trap on the implementer). The review
+      # has to be about the commit under review.
       #
-      # `.agents/reviewer.md` already requires the head SHA to be named in the
-      # verdict, so this asserts what the role file already asks for, and
-      # catches a reviewer that judged a commit that has since been pushed over.
+      # Since `0012` that is an equality test on `commit_id`, which GitHub
+      # records on the review itself. The reviewer no longer has to state the
+      # SHA, and this no longer depends on it having remembered to.
       - name: Define what a finished review means
         env:
           GH_TOKEN: ${{ steps.token.outputs.token }}
@@ -255,28 +257,27 @@ jobs:
         run: |
           cat > "$RUNNER_TEMP/review-done.sh" <<'DONE'
           set -u
-          J=$(gh pr view "$PR" --repo "$REPO" --json headRefOid,comments)
-          HEAD=$(jq -r '.headRefOid' <<< "$J")
-          LAST=$(jq -r '[.comments[].body | select(startswith("VERDICT:"))] | last // ""' <<< "$J")
+          HEAD=$(gh pr view "$PR" --repo "$REPO" --json headRefOid --jq '.headRefOid')
+          # `0012`: the verdict IS the review. Its `commit_id` is the commit it
+          # was submitted against — recorded by GitHub, not written by a model,
+          # so this is an equality test rather than a prefix match over prose.
+          R=$(gh api "repos/$REPO/pulls/$PR/reviews" \
+                --jq '[.[] | select(.state != "PENDING")] | last // empty')
 
-          if [ -z "$LAST" ]; then
-            echo "Pull request #$PR carries no VERDICT comment."
+          if [ -z "$R" ]; then
+            echo "Pull request #$PR carries no review."
             echo "The commit under review is $HEAD."
             exit 1
           fi
-          # Match on the abbreviated SHA. The role file asks for the head SHA
-          # and the model may write it short; any longer form contains this
-          # prefix, and a seven-hex prefix does not collide with the commit this
-          # branch had before. Being strict about the FORMAT here would fail
-          # reviews that were correct.
-          if ! grep -qF "${HEAD:0:7}" <<< "$LAST"; then
-            echo "The latest VERDICT on #$PR does not name the commit under review."
+          AT=$(jq -r '.commit_id' <<< "$R")
+          STATE=$(jq -r '.state' <<< "$R")
+          if [ "$AT" != "$HEAD" ]; then
+            echo "The latest review on #$PR is not about the commit under review."
             echo "  commit under review: $HEAD"
-            echo "  latest verdict:"
-            sed 's/^/    /' <<< "$LAST" | head -5
+            echo "  latest review:       $STATE, submitted against $AT"
             exit 1
           fi
-          echo "A verdict naming $HEAD is posted."
+          echo "A $STATE review against $HEAD is posted."
           DONE
           chmod +x "$RUNNER_TEMP/review-done.sh"
 
@@ -435,10 +436,25 @@ jobs:
           REPO: ${{ github.repository }}
         run: |
           # One read, reused below. Every `gh pr view` is a round trip.
-          PRJSON=$(gh pr view "$PR" --repo "$REPO" --json comments,labels,headRefOid)
-          LAST=$(jq -r '[.comments[].body | select(startswith("VERDICT:"))] | last // ""' <<< "$PRJSON")
-          V=$(head -1 <<< "$LAST" | cut -d' ' -f2)
+          PRJSON=$(gh pr view "$PR" --repo "$REPO" --json labels,headRefOid)
           HEAD=$(jq -r '.headRefOid' <<< "$PRJSON")
+
+          # `0012`: the verdict is a REVIEW. Two fields, both recorded by
+          # GitHub — `state` is the decision and `commit_id` is what was judged.
+          # Nothing here parses prose a model wrote.
+          R=$(gh api "repos/$REPO/pulls/$PR/reviews" \
+                --jq '[.[] | select(.state != "PENDING")] | last // empty')
+          # `${R:-null}`, not `${R:-{}}` — the closing brace inside the default
+          # terminates the expansion early and jq gets malformed input. `null`
+          # is valid JSON and `.state // ""` on it gives the empty string.
+          RJ=${R:-null}
+          AT=$(jq -r '.commit_id // ""' <<< "$RJ")
+          case "$(jq -r '.state // ""' <<< "$RJ")" in
+            APPROVED)          V=merge ;;
+            CHANGES_REQUESTED) V=rework ;;
+            COMMENTED)         V=unsure ;;
+            *)                 V="" ;;
+          esac
 
           # ── ADR 0009, guard 2. A verdict is about one commit. If the branch
           # has been pushed to since the reviewer read it, this verdict says
@@ -453,9 +469,12 @@ jobs:
           # Only the `merge` path is guarded. `rework` and `unsure` end in a
           # label, not an action on a commit, and re-labelling is idempotent.
           #
-          # Matching on the seven-character prefix, as `review-done.sh` does:
-          # the role file asks for a SHA, not for a format.
-          if [ "$V" = "merge" ] && ! grep -qF "${HEAD:0:7}" <<< "$LAST"; then
+          # An equality test since `0012`. It used to match a seven-character
+          # prefix against whatever the model had written, because the role file
+          # asks for a SHA and not for a format — a guard whose precision was
+          # capped by a model's prose. `commit_id` is GitHub's own record of
+          # what was reviewed.
+          if [ "$V" = "merge" ] && [ "$AT" != "$HEAD" ]; then
             N=$(jq -r '[.labels[].name | select(startswith("stale:"))]
                        | map(sub("stale:";"") | tonumber) | max // 0' <<< "$PRJSON")
             NEXT=$((N + 1))
@@ -495,6 +514,7 @@ jobs:
               if [ -n "$REMOVE" ]; then
                 gh pr edit "$PR" --repo "$REPO" --remove-label "$REMOVE"
               fi
+              echo "reviewed=$AT" >> "$GITHUB_OUTPUT"
               echo "go=true" >> "$GITHUB_OUTPUT" ;;
             rework)
               gh pr edit "$PR" --repo "$REPO" --add-label needs:rework
@@ -503,7 +523,7 @@ jobs:
               gh pr edit "$PR" --repo "$REPO" --add-label needs:human
               gh pr ready "$PR" --repo "$REPO"
               gh pr comment "$PR" --repo "$REPO" --body \
-                "The reviewer was unsure, or left no parsable verdict. A human should look (ADR 0006)."
+                "The reviewer was unsure, or submitted no review at all. A human should look (ADR 0006)."
               echo "go=false" >> "$GITHUB_OUTPUT" ;;
           esac
 
@@ -554,6 +574,7 @@ jobs:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           PR: ${{ needs.triage.outputs.number }}
           REPO: ${{ github.repository }}
+          REVIEWED: ${{ steps.verdict.outputs.reviewed }}
         run: |
           # Refuse to run an agent with no role instructions. `--skill` used to
           # fail silently here and two runs went out with none (`NOTES.md` 25).
@@ -568,6 +589,14 @@ jobs:
           cat > "$RUNNER_TEMP/prompt.md" <<PROMPT
           Decide whether pull request #$PR in $REPO merges to develop,
           following .agents/gatekeeper.md.
+
+          The reviewer's review was submitted against commit $REVIEWED.
+          If you merge, pin the merge to it:
+
+              gh pr merge $PR --repo $REPO --match-head-commit $REVIEWED
+
+          GitHub then refuses the merge itself if the head has moved since the
+          review, so the commit that merges is always the commit that was read.
 
           That file holds when to merge, when to escalate, and the exact
           commands that end the run either way. There is no third ending.
