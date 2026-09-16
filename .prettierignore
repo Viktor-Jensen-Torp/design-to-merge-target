@@ -9,6 +9,7 @@ pnpm-lock.yaml
 .github
 .githooks
 scripts/pi-driver.py
+scripts/release-groups.py
 AGENTS.md
 CLAUDE.md
 CODEOWNERS

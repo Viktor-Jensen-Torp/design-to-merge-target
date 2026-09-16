@@ -49,8 +49,17 @@ permissions:
 # the whole range from scratch, so a superseded run has nothing the newer one
 # will not redo — unlike `implement.yml`, where a cancelled run is lost work
 # (`NOTES.md` 5). Two merges landing seconds apart must not race on `gh pr edit`.
+#
+# The group is keyed by EVENT. A single shared group meant a dispatch cancelled
+# the push run that a merge had just started, and GitHub renders a cancelled run
+# as a RED CHECK on the release pull request — a check that is not a failure,
+# on the one artefact a human is asked to read before approving. This file's
+# sibling warns about exactly that: a workflow that is permanently red trains
+# everyone to ignore it. Pushes still serialise against pushes, which is the
+# race that mattered; a dispatch and a push may now overlap, and both write the
+# identical body, so there is nothing to lose (`NOTES.md` 33).
 concurrency:
-  group: release-pr
+  group: release-pr-${{ github.event_name }}
   cancel-in-progress: true
 
 jobs:
@@ -120,6 +129,26 @@ jobs:
                    | awk -F'\t' '{c[$1]++} END{for (f in c) if (c[f] > 1) print c[f]"\t"f}' \
                    | sort -k1,1nr -k2,2)
 
+          # The same overlap, read the other way round: which pull requests
+          # cannot be dropped alone. `0011` says a rejected issue is REVERTED,
+          # and a revert of one that another was built on leaves the second
+          # calling into code that is no longer there. The seam table shows
+          # where to look; this shows what a decision costs.
+          #
+          # DROP_GROUPS, not GROUPS. **`GROUPS` is a bash special variable** —
+          # an array of the caller's group ids — and bash REFUSES the
+          # assignment. Under `set -e` that killed this step instantly with no
+          # output whatsoever, which is how it shipped: it looked like a step
+          # that had not run rather than one that had failed (`NOTES.md` 36).
+          #
+          # In a file rather than a heredoc, so it can be tested. The version
+          # that shipped had a `python3 - <<PY` inside `$( )`, which is
+          # untestable in place and was the first thing suspected here — wrongly,
+          # and at some cost.
+          test -x scripts/release-groups.py \
+            || { echo "::error::scripts/release-groups.py is missing"; exit 1; }
+          DROP_GROUPS=$(python3 scripts/release-groups.py "$PAIRS")
+
           BODY=$(mktemp)
           {
             printf 'Releasing `%s` into `%s`.\n\n' "$HEAD" "$BASE"
@@ -142,6 +171,27 @@ jobs:
             else
               printf 'None — no file was touched by more than one pull request in this\n'
               printf 'release. There is no seam to read.\n'
+            fi
+
+            printf '\n## If you drop one, you drop the group\n\n'
+            if [ -n "$DROP_GROUPS" ]; then
+              printf 'These pull requests touch the same files. Reverting one on its own\n'
+              printf 'leaves the others building on code that is no longer there, so each\n'
+              printf 'group goes or stays together.\n\n'
+              # One sed, not `printf '#%s '`: printf's format cycling is not
+              # worth relying on across shells, and this is unambiguous.
+              printf '%s\n' "$DROP_GROUPS" | while read -r g; do
+                printf -- '- %s\n' "$(printf '%s' "$g" | sed 's/ /, #/g; s/^/#/')"
+              done
+              printf '\n**This is computed from file overlap, which is a proxy.** Two pull\n'
+              printf 'requests can depend on each other without sharing a file — one calls\n'
+              printf 'a function the other added. Treat this list as the cases worth\n'
+              printf 'checking first, not as the complete set.\n'
+            else
+              printf 'No two pull requests in this release touched the same file, so any of\n'
+              printf 'them can be reverted on its own — as far as file overlap can tell. A\n'
+              printf 'dependency that does not show up as a shared file will not show up\n'
+              printf 'here either.\n'
             fi
 
             printf '\n## Before approving\n\n'
