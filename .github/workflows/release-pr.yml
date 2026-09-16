@@ -135,45 +135,19 @@ jobs:
           # calling into code that is no longer there. The seam table shows
           # where to look; this shows what a decision costs.
           #
-          # Transitive, via union-find: if 16 and 17 share a file and 17 and 18
-          # share a different one, all three move together even though 16 and 18
-          # touch nothing in common.
-          GROUPS=$(python3 - "$PAIRS" <<'PYEOF'
-          import sys, collections
-
-          touched = collections.defaultdict(set)
-          for line in open(sys.argv[1]):
-              if not line.strip():
-                  continue
-              pr, path = line.split(None, 1)
-              touched[path.strip()].add(pr)
-
-          parent = {}
-          def find(x):
-              parent.setdefault(x, x)
-              while parent[x] != x:
-                  parent[x] = parent[parent[x]]
-                  x = parent[x]
-              return x
-          def union(a, b):
-              ra, rb = find(a), find(b)
-              if ra != rb:
-                  parent[ra] = rb
-
-          for prs in touched.values():
-              prs = sorted(prs, key=int)
-              for other in prs[1:]:
-                  union(prs[0], other)
-
-          groups = collections.defaultdict(set)
-          for pr in parent:
-              groups[find(pr)].add(pr)
-
-          for g in sorted(groups.values(), key=lambda s: (-len(s), sorted(s, key=int))):
-              if len(g) > 1:
-                  print(" ".join(sorted(g, key=int)))
-          PYEOF
-          )
+          # DROP_GROUPS, not GROUPS. **`GROUPS` is a bash special variable** —
+          # an array of the caller's group ids — and bash REFUSES the
+          # assignment. Under `set -e` that killed this step instantly with no
+          # output whatsoever, which is how it shipped: it looked like a step
+          # that had not run rather than one that had failed (`NOTES.md` 36).
+          #
+          # In a file rather than a heredoc, so it can be tested. The version
+          # that shipped had a `python3 - <<PY` inside `$( )`, which is
+          # untestable in place and was the first thing suspected here — wrongly,
+          # and at some cost.
+          test -x scripts/release-groups.py \
+            || { echo "::error::scripts/release-groups.py is missing"; exit 1; }
+          DROP_GROUPS=$(python3 scripts/release-groups.py "$PAIRS")
 
           BODY=$(mktemp)
           {
@@ -200,13 +174,13 @@ jobs:
             fi
 
             printf '\n## If you drop one, you drop the group\n\n'
-            if [ -n "$GROUPS" ]; then
+            if [ -n "$DROP_GROUPS" ]; then
               printf 'These pull requests touch the same files. Reverting one on its own\n'
               printf 'leaves the others building on code that is no longer there, so each\n'
               printf 'group goes or stays together.\n\n'
               # One sed, not `printf '#%s '`: printf's format cycling is not
               # worth relying on across shells, and this is unambiguous.
-              printf '%s\n' "$GROUPS" | while read -r g; do
+              printf '%s\n' "$DROP_GROUPS" | while read -r g; do
                 printf -- '- %s\n' "$(printf '%s' "$g" | sed 's/ /, #/g; s/^/#/')"
               done
               printf '\n**This is computed from file overlap, which is a proxy.** Two pull\n'
