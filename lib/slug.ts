@@ -6,24 +6,30 @@
  */
 export const MAX_SLUG_LENGTH = 60;
 
-export function slugify(title: string): string {
-  return capSlug(
-    title
-      .trim()
-      .toLowerCase()
-      .normalize("NFD")
-      .replace(/[\u0300-\u036f]/g, "")
-      .replace(/[^a-z0-9]+/g, "-")
-      .replace(/^-+|-+$/g, ""),
-  );
+export function slugify(title: string, maxLength?: number): string {
+  // Determine the effective max length.
+  let effectiveMax = MAX_SLUG_LENGTH;
+  if (maxLength !== undefined) {
+    if (maxLength <= 0) return "";
+    effectiveMax = Math.floor(maxLength);
+    if (effectiveMax <= 0) return "";
+  }
+  const slug = title
+    .trim()
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+  return capSlug(slug, effectiveMax);
 }
 
-function capSlug(slug: string): string {
-  if (slug.length <= MAX_SLUG_LENGTH) {
+function capSlug(slug: string, maxLength: number): string {
+  if (slug.length <= maxLength) {
     return slug;
   }
   // Truncate to max length first
-  const truncated = slug.substring(0, MAX_SLUG_LENGTH);
+  const truncated = slug.substring(0, maxLength);
   // Find the last dash that serves as a word boundary.
   // A word boundary dash has a lowercase letter before and after it,
   // ensuring we cut between words rather than inside hyphenated words.
@@ -49,7 +55,7 @@ function capSlug(slug: string): string {
     }
     return result;
   }
-  // No word-boundary dash found; hard-cut at 60
+  // No word-boundary dash found; hard-cut at given length
   // Ensure no trailing dash remains
   if (truncated.endsWith("-")) {
     return truncated.slice(0, -1);

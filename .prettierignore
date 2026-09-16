@@ -8,9 +8,9 @@ pnpm-lock.yaml
 .agents
 .github
 .githooks
+.pi
 scripts/pi-driver.py
 scripts/release-groups.py
-scripts/post-review.py
 AGENTS.md
 CLAUDE.md
 CODEOWNERS

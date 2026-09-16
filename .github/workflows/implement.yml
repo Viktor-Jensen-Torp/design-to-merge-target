@@ -104,6 +104,11 @@ jobs:
           pnpm exec tsc --version >/dev/null || { echo "::error::toolchain not runnable"; exit 1; }
           python3 --version >/dev/null || { echo "::error::no python3 for the driver"; exit 1; }
           test -x scripts/pi-driver.py || { echo "::error::scripts/pi-driver.py missing"; exit 1; }
+          # `.pi/extensions/` is auto-discovered, which means a missing file is
+          # silent: the run proceeds with no submit tool and the role's
+          # instruction to call it becomes an instruction to call nothing.
+          test -s .pi/extensions/submit.ts \
+            || { echo "::error::.pi/extensions/submit.ts missing — the role is told to call submit_implementation"; exit 1; }
 
       # The agent is GIVEN the issue. It is not asked to find it.
       #
@@ -138,6 +143,12 @@ jobs:
         env:
           GH_TOKEN: ${{ steps.token.outputs.token }}
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          # Read by .pi/extensions/submit.ts to decide which submit tool to
+          # register, and by the tool to know what to compare the branch against.
+          PI_ROLE: implementer
+          PI_BASE_REF: origin/develop
+          # No update check, no telemetry, on every run.
+          PI_OFFLINE: "1"
           N: ${{ github.event.issue.number }}
           REPO: ${{ github.repository }}
         run: |

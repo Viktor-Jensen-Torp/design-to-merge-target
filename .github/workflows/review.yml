@@ -245,7 +245,6 @@ jobs:
             .pi
             AGENTS.md
             scripts/pi-driver.py
-            scripts/post-review.py
           sparse-checkout-cone-mode: false
 
       - uses: actions/setup-node@v4
@@ -302,6 +301,13 @@ jobs:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           PR: ${{ needs.triage.outputs.number }}
           REPO: ${{ github.repository }}
+          # Read by .pi/extensions/submit.ts: which submit tool to register,
+          # and which pull request it posts the verdict to. The tool reads the
+          # head SHA itself, so the role never states it (`0009` guard 2).
+          PI_ROLE: reviewer
+          PI_PR: ${{ needs.triage.outputs.number }}
+          PI_REPO: ${{ github.repository }}
+          PI_OFFLINE: "1"
         run: |
           # No checkout above, for two independent reasons.
           #
@@ -313,10 +319,14 @@ jobs:
           # point at the DEFAULT BRANCH, not the triggering run, so a bare
           # actions/checkout would fetch the wrong code (NOTES.md section 7).
           #
-          # --exclude-tools drops file editing. Note plainly what that is worth:
-          # the role still holds `bash`, which writes files, and needs it to run
-          # `gh` at all. This is hygiene, not a control. The control is that
-          # this App has no merge rights.
+          # --tools is an allowlist, not the --exclude-tools denylist this used
+          # to be. The difference is what happens when Pi gains a tool: a
+          # denylist silently grants it, an allowlist silently withholds it, and
+          # of the two only the second fails safe.
+          #
+          # Note plainly what it is worth: the role still holds `bash`, which
+          # writes files, and needs it to run `gh` at all. This is hygiene, not
+          # a control. The control is that this App has no merge rights.
           # Refuse to run an agent with no role instructions. `--skill` used to
           # fail silently here and two runs went out with none (`NOTES.md` 25).
           test -s .agents/reviewer.md \
@@ -325,8 +335,11 @@ jobs:
             || { echo "::error::.agents/nudge-reviewer.md is missing or empty"; exit 1; }
           test -x scripts/pi-driver.py \
             || { echo "::error::scripts/pi-driver.py missing from the sparse checkout"; exit 1; }
-          test -x scripts/post-review.py \
-            || { echo "::error::scripts/post-review.py missing from the sparse checkout"; exit 1; }
+          # `.pi/extensions/` is auto-discovered, so a missing file is silent:
+          # the run would proceed with no submit_review tool at all and the role
+          # would have no way to post anything.
+          test -s .pi/extensions/submit.ts \
+            || { echo "::error::.pi/extensions/submit.ts missing — the role has no way to post a verdict"; exit 1; }
           test -s AGENTS.md \
             || { echo "::error::AGENTS.md is not in the checkout — this role is told to read it"; exit 1; }
           echo "role instructions: $(wc -c < .agents/reviewer.md) bytes"
@@ -356,7 +369,7 @@ jobs:
             -- pi --mode rpc --approve \
                   --append-system-prompt "$(cat .agents/reviewer.md)" \
                   --model "${{ vars.REVIEW_MODEL }}" \
-                  --exclude-tools edit,write
+                  --tools read,grep,find,ls,bash,submit_review
 
   # ── The authority. Serial, so two merges never race.
   gatekeep:
@@ -653,6 +666,11 @@ jobs:
           PR: ${{ needs.triage.outputs.number }}
           REPO: ${{ github.repository }}
           REVIEWED: ${{ steps.verdict.outputs.reviewed }}
+          # This role registers no submit tool, and says so on stderr. Its
+          # finish is a merge or an escalation — both `gh` calls the driver's
+          # --done check can see directly.
+          PI_ROLE: gatekeeper
+          PI_OFFLINE: "1"
         run: |
           # Refuse to run an agent with no role instructions. `--skill` used to
           # fail silently here and two runs went out with none (`NOTES.md` 25).
@@ -702,7 +720,7 @@ jobs:
             -- pi --mode rpc --approve \
                   --append-system-prompt "$(cat .agents/gatekeeper.md)" \
                   --model "${{ vars.GATEKEEP_MODEL }}" \
-                  --exclude-tools edit,write
+                  --tools read,grep,find,ls,bash
 
       # Silence is the one outcome not allowed. On the Hermes rig a reviewer
       # twice decided privately that a human should handle something and then
