@@ -49,8 +49,17 @@ permissions:
 # the whole range from scratch, so a superseded run has nothing the newer one
 # will not redo — unlike `implement.yml`, where a cancelled run is lost work
 # (`NOTES.md` 5). Two merges landing seconds apart must not race on `gh pr edit`.
+#
+# The group is keyed by EVENT. A single shared group meant a dispatch cancelled
+# the push run that a merge had just started, and GitHub renders a cancelled run
+# as a RED CHECK on the release pull request — a check that is not a failure,
+# on the one artefact a human is asked to read before approving. This file's
+# sibling warns about exactly that: a workflow that is permanently red trains
+# everyone to ignore it. Pushes still serialise against pushes, which is the
+# race that mattered; a dispatch and a push may now overlap, and both write the
+# identical body, so there is nothing to lose (`NOTES.md` 33).
 concurrency:
-  group: release-pr
+  group: release-pr-${{ github.event_name }}
   cancel-in-progress: true
 
 jobs:
