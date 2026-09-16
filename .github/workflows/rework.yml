@@ -159,6 +159,27 @@ jobs:
             fi
           fi
 
+      # The agent commits, so git needs an identity. Without one its first
+      # `git commit` fails with "Author identity unknown", and on 2026-09-16 the
+      # implementer recovered by inventing one — every commit on that branch is
+      # authored by `Agent <you@example.com>` (`NOTES.md` 45). The work was
+      # right and the authorship was a placeholder, which is worse than a
+      # failure: it is wrong and it looks fine.
+      #
+      # The App's own bot identity is the honest answer. It is what GitHub
+      # attributes the push to anyway, and it makes `git log` say which role
+      # wrote a commit.
+      - name: Give the agent the App's identity
+        env:
+          GH_TOKEN: ${{ steps.token.outputs.token }}
+          SLUG: ${{ steps.token.outputs.app-slug }}
+        run: |
+          id=$(gh api "/users/${SLUG}%5Bbot%5D" --jq .id) \
+            || { echo "::error::could not resolve the bot user id for ${SLUG}"; exit 1; }
+          git config user.name  "${SLUG}[bot]"
+          git config user.email "${id}+${SLUG}[bot]@users.noreply.github.com"
+          echo "commits will be authored by ${SLUG}[bot] <${id}+${SLUG}[bot]@users.noreply.github.com>"
+
       - uses: actions/setup-node@v4
         if: steps.count.outputs.stop == 'false'
         with:

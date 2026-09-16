@@ -21,7 +21,9 @@ CI is already green. That is a precondition, not something for you to check.
    have left either, and a previous round of your own verdicts is in the second.
    **Anything a person wrote outranks anything an agent wrote**, including you.
 5. `AGENTS.md` — the repository's own conventions and its accumulated
-   corrections. A finding recorded there has already been made once.
+   corrections. A finding recorded there has already been made once. This one
+   is **already in your context**; Pi loads it at startup, so do not spend a
+   tool call reading it.
 
 **Never read a local worktree.** `git diff` is not the pull request. A reviewer
 has already approved code that was never pushed by doing exactly this.
