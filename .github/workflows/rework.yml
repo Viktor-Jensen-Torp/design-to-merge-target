@@ -212,6 +212,13 @@ jobs:
           # already on the remote branch. "Clean tree" alone is true the moment
           # the job checks out, so on its own it gates nothing (`NOTES.md` 27).
           cat > "$RUNNER_TEMP/done.sh" <<'DONE'
+          # Asking for a human is a valid ending, not a failure — see
+          # implement.yml. An agent that has decided it needs a decision it is
+          # not allowed to make must not be nudged twice and then failed.
+          if [ -s "$RUNNER_TEMP/needs-human.md" ]; then
+            echo "The agent asked for a human."
+            exit 0
+          fi
           st=$(git status --porcelain)
           ahead=$(git rev-list --count "origin/$HEAD_REF"..HEAD)
           [ -n "$st" ] && { echo "Uncommitted changes in the working tree:"; echo "$st"; }
@@ -241,8 +248,43 @@ jobs:
       # it, and a check written in two places is a check that will eventually
       # disagree with itself.
 
-      - name: Publish
+      # The implementer's escalate verb, on a pull request rather than an issue.
+      # `0006`: silence is never an outcome. An agent that stops deliberately
+      # and one that breaks used to be indistinguishable here too.
+      - name: Did the agent ask for a human?
+        id: askhuman
         if: steps.count.outputs.stop == 'false'
+        run: |
+          if [ -s "$RUNNER_TEMP/needs-human.md" ]; then
+            echo "asked=true" >> "$GITHUB_OUTPUT"
+            echo "the agent asked for a human: $(wc -c < "$RUNNER_TEMP/needs-human.md") bytes"
+          else
+            echo "asked=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Hand it to a human
+        if: steps.askhuman.outputs.asked == 'true'
+        env:
+          GH_TOKEN: ${{ steps.token.outputs.token }}
+          PR: ${{ github.event.pull_request.number }}
+          REPO: ${{ github.repository }}
+          RUN: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          {
+            echo "The implementer stopped reworking this and asked for a human. Its reason:"
+            echo
+            sed 's/^/> /' "$RUNNER_TEMP/needs-human.md"
+            echo
+            echo "A deliberate stop, not a failed run — it spends no strike. $RUN"
+          } > "$RUNNER_TEMP/handover.md"
+          gh pr comment "$PR" --repo "$REPO" --body-file "$RUNNER_TEMP/handover.md"
+          gh pr edit "$PR" --repo "$REPO" --add-label needs:human --remove-label needs:rework
+          gh pr ready "$PR" --repo "$REPO" || true
+          echo "pull request #$PR -> needs:human"
+
+      - name: Publish
+        if: steps.count.outputs.stop == 'false' && steps.askhuman.outputs.asked != 'true'
         env:
           GH_TOKEN: ${{ steps.token.outputs.token }}
           PR: ${{ github.event.pull_request.number }}
