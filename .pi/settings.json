@@ -2,16 +2,38 @@
   "_comment": [
     "Goes in the TARGET repo at .pi/settings.json.",
     "",
-    "`0008` says project KNOWLEDGE never lives here — that belongs in AGENTS.md,",
+    "`0008` says project KNOWLEDGE never lives here \u2014 that belongs in AGENTS.md,",
     "which every harness reads. These are runtime knobs for Pi as a caller, which",
     "is exactly what `0008` says this file is for.",
     "",
     "Project settings need project trust. In non-interactive mode there is no",
     "prompt, so the workflows pass `--approve`. Until this file existed that flag",
     "was a no-op (`security.md`: a bare `.pi` directory is not a project resource).",
-    "It now does something."
+    "It now does something.",
+    "",
+    "DO NOT SET `enableInstallTelemetry` TO false. It does not only control the",
+    "install ping. From `dist/core/provider-attribution.js`:",
+    "",
+    "    getDefaultAttributionHeaders(model, settings):",
+    "      if (!isInstallTelemetryEnabled(settings)) return undefined;",
+    "      if (isOpenRouterModel(model)) return {",
+    "        'HTTP-Referer': 'https://pi.dev',",
+    "        'X-OpenRouter-Title': 'pi',",
+    "        'X-OpenRouter-Categories': 'cli-agent' };",
+    "",
+    "OpenRouter gates some `:free` models to recognised agentic harnesses and",
+    "identifies them BY THOSE HEADERS. With telemetry off they are not sent and the",
+    "model answers 403 'only available on agentic harnesses', with",
+    "failed_routing_step 'Gate Free Endpoints by Agentic Harness'. That is what",
+    "killed every review on 2026-09-16 \u2014 `NOTES.md` 47.",
+    "",
+    "The headers name the HARNESS, not the user, the repository or the code.",
+    "`enableAnalytics` is the separate opt-in that shares usage data; it stays off.",
+    "",
+    "`PI_OFFLINE` is NOT involved: isInstallTelemetryEnabled reads PI_TELEMETRY and",
+    "then this setting, and nothing else. Keeping PI_OFFLINE=1 in the workflows is",
+    "safe and still skips the startup update check."
   ],
-
   "retry": {
     "enabled": true,
     "maxRetries": 3,
@@ -21,17 +43,21 @@
       "maxRetryDelayMs": 30000
     }
   },
-
   "httpIdleTimeoutMs": 180000,
-
-  "defaultTools": ["read", "bash", "edit", "write", "grep", "find", "ls"],
-
+  "defaultTools": [
+    "read",
+    "bash",
+    "edit",
+    "write",
+    "grep",
+    "find",
+    "ls"
+  ],
   "compaction": {
     "enabled": true,
     "reserveTokens": 16384,
     "keepRecentTokens": 20000
   },
-
-  "enableInstallTelemetry": false,
+  "enableInstallTelemetry": true,
   "enableAnalytics": false
 }
