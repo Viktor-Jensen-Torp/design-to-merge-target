@@ -282,14 +282,28 @@ def main():
                     # "length" means the reply was truncated mid-thought, which
                     # is indistinguishable from a finished one in the text —
                     # and "error"/"aborted" mean the turn did not happen at all.
-                    reason = (ev.get("message") or {}).get("stopReason")
+                    msg = ev.get("message") or {}
+                    reason = msg.get("stopReason")
                     if reason and reason not in ("stop", "toolUse"):
-                        log(f"  ! turn ended on stopReason={reason}")
+                        # `errorMessage` sits next to `stopReason` on the same
+                        # message and is the only place the provider's own words
+                        # appear. Logging the reason without it told us a review
+                        # had failed three times in three seconds and nothing
+                        # about why (`NOTES.md` 45).
+                        detail = msg.get("errorMessage") or ""
+                        if detail:
+                            detail = ": " + str(detail)[:600].replace("\n", " ⏎ ")
+                        log(f"  ! turn ended on stopReason={reason}{detail}")
                         stop_reasons.append(reason)
 
                 elif t == "auto_retry_start":
                     retries += 1
-                    log(f"  ~ auto-retry {retries}/{args.max_retries} (transient provider error)")
+                    # `errorMessage` is on this event and says what was
+                    # transient. rpc.md documents it; we were logging the
+                    # attempt number and dropping the cause.
+                    why = str(ev.get("errorMessage") or "").strip()
+                    why = (": " + why[:300].replace("\n", " ⏎ ")) if why else ""
+                    log(f"  ~ auto-retry {retries}/{args.max_retries}{why}")
                     if retries > args.max_retries:
                         # Without this the run sits here until --timeout fires,
                         # spending the whole budget learning nothing. A provider
@@ -301,6 +315,10 @@ def main():
                         )
                         verdict = 5
                         break
+
+                elif t == "auto_retry_end" and ev.get("success") is False:
+                    # The one event that names why retrying stopped helping.
+                    log(f"  ! retries exhausted: {str(ev.get('finalError') or '(no finalError)')[:400]}")
 
                 elif t == "compaction_start":
                     log("  ~ compacting context")

@@ -5,23 +5,42 @@
     "WHY THIS FILE EXISTS. Until 2026-09-16 the pipeline sent no sampling",
     "parameters at all. Pi only sends them when something defines them, and",
     "OpenRouter does not substitute a default \u2014 it omits the parameter upstream",
-    "and whichever provider serves the request applies its own. A `:free` model",
-    "routes across several providers, so the sampling that produced any given",
-    "token was chosen by whoever answered, and a retry can land somewhere else.",
-    "That is `NOTES.md` 43, and it is the leading candidate for the token soup",
-    "in `NOTES.md` 38.",
+    "and whichever provider serves the request applies its own. `NOTES.md` 43.",
     "",
-    "`samplingParams` is merged VERBATIM into the request body and its keys win",
-    "(`models.md`), so it carries both the sampling AND OpenRouter's top-level",
-    "`provider` routing block. One field, both hypotheses.",
+    "TWO FIELDS, TWO JOBS.",
     "",
-    "UNVERIFIED, deliberately: OpenRouter warns that sending values explicitly",
-    "can affect provider-side cache keys, and its documentation says nothing",
-    "about how provider routing interacts with `:free` variants. We are finding",
-    "out by running it. If this file makes things worse, delete it \u2014 that is a",
-    "result, not a setback.",
+    "`samplingParams` is merged verbatim into the request body, last, so its keys",
+    "beat pi's named fields (`models.md`, and openai-completions.js line 761).",
+    "It carries sampling and nothing else.",
     "",
-    "No `sort`. Sorting by throughput selects the fastest node, which is also how you find a heavily quantised one \u2014 the opposite of what we are testing. `require_parameters: true` restricts routing to providers that actually honour the sampling we send, which is the point of sending it."
+    "`compat.openRouterRouting` is sent AS-IS as the request's `provider` field",
+    "(openai-completions.js line 745). This is the native, typed home for",
+    "OpenRouter routing. We previously put the routing block inside",
+    "`samplingParams`, which also works \u2014 samplingParams is applied later and",
+    "wins \u2014 but routing is not sampling, and a reader will not look for it there.",
+    "",
+    "ON `require_parameters: true`. It restricts routing to providers honouring",
+    "every parameter sent. Kept deliberately: if we pin sampling we want it",
+    "applied, and a provider quietly ignoring it is the silent failure this repo",
+    "keeps hitting. Checked against OpenRouter's /endpoints on 2026-09-16 rather",
+    "than assumed \u2014 every endpoint behind inkling and nemotron supports both",
+    "temperature and top_p, so the flag costs us no providers on those two.",
+    "",
+    "`top_p` is NOT set for laguna, and that is not a style choice. laguna has",
+    "exactly ONE endpoint, it does not support top_p, and sending it with",
+    "require_parameters on would have left zero eligible providers \u2014 a guaranteed",
+    "instant failure. It was latent only because the gatekeeper escalates on",
+    "authority without calling a model.",
+    "",
+    "NOT SET YET, AND THE NEXT THING TO TRY: `quantizations`. The implementer's",
+    "model can be served at int4 (Darkbloom) and the gatekeeper's single endpoint",
+    "is fp4. That is `NOTES.md` 38's token soup with a name on it. Deliberately",
+    "NOT changed in the same pass that is meant to diagnose the reviewer \u2014 one",
+    "variable at a time. Note that laguna cannot be filtered at all: it has one",
+    "endpoint and any quantization filter leaves zero.",
+    "",
+    "No `sort`. Sorting by throughput selects the fastest node, which is also how",
+    "you find a heavily quantised one."
   ],
   "providers": {
     "openrouter": {
@@ -29,8 +48,10 @@
         "nvidia/nemotron-3.5-lightning:free": {
           "samplingParams": {
             "temperature": 0.2,
-            "top_p": 0.9,
-            "provider": {
+            "top_p": 0.9
+          },
+          "compat": {
+            "openRouterRouting": {
               "allow_fallbacks": true,
               "require_parameters": true
             }
@@ -39,8 +60,10 @@
         "thinkingmachines/inkling:free": {
           "samplingParams": {
             "temperature": 0.1,
-            "top_p": 0.9,
-            "provider": {
+            "top_p": 0.9
+          },
+          "compat": {
+            "openRouterRouting": {
               "allow_fallbacks": true,
               "require_parameters": true
             }
@@ -48,9 +71,10 @@
         },
         "poolside/laguna-s-2.1:free": {
           "samplingParams": {
-            "temperature": 0.0,
-            "top_p": 1.0,
-            "provider": {
+            "temperature": 0.0
+          },
+          "compat": {
+            "openRouterRouting": {
               "allow_fallbacks": true,
               "require_parameters": true
             }
