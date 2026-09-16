@@ -370,6 +370,14 @@ jobs:
           case ",$LABELS," in
             *,needs:human,*|*,needs:rework,*) echo "Pull request #$PR is labelled: $LABELS"; exit 0 ;;
           esac
+          # A `stale:` label is also an ending, and a deliberate one: guard 2
+          # declined to merge a verdict for a commit that is no longer the head,
+          # said so on the pull request, and left the review of the NEW head to
+          # decide. Without this the safety net would call that silence and
+          # escalate a pull request that is working exactly as designed.
+          case "$LABELS" in
+            *stale:*) echo "Pull request #$PR is waiting on a fresh verdict: $LABELS"; exit 0 ;;
+          esac
 
           echo "Pull request #$PR has no outcome."
           echo "  state:        $STATE"
@@ -395,9 +403,47 @@ jobs:
           REPO: ${{ github.repository }}
         run: |
           # One read, reused below. Every `gh pr view` is a round trip.
-          PRJSON=$(gh pr view "$PR" --repo "$REPO" --json comments,labels)
-          V=$(jq -r '[.comments[].body | select(startswith("VERDICT:"))] | last // ""' \
-                <<< "$PRJSON" | head -1 | cut -d' ' -f2)
+          PRJSON=$(gh pr view "$PR" --repo "$REPO" --json comments,labels,headRefOid)
+          LAST=$(jq -r '[.comments[].body | select(startswith("VERDICT:"))] | last // ""' <<< "$PRJSON")
+          V=$(head -1 <<< "$LAST" | cut -d' ' -f2)
+          HEAD=$(jq -r '.headRefOid' <<< "$PRJSON")
+
+          # ── ADR 0009, guard 2. A verdict is about one commit. If the branch
+          # has been pushed to since the reviewer read it, this verdict says
+          # nothing about what would actually merge.
+          #
+          # The prototype found the loop this prevents — a branch someone keeps
+          # pushing to bounces between review and gate forever — at roughly one
+          # random walk in twenty thousand. So it gets its own small budget, and
+          # `0009` is explicit that it spends no STRIKE: nothing was wrong with
+          # the work, the work simply moved.
+          #
+          # Only the `merge` path is guarded. `rework` and `unsure` end in a
+          # label, not an action on a commit, and re-labelling is idempotent.
+          #
+          # Matching on the seven-character prefix, as `review-done.sh` does:
+          # the role file asks for a SHA, not for a format.
+          if [ "$V" = "merge" ] && ! grep -qF "${HEAD:0:7}" <<< "$LAST"; then
+            N=$(jq -r '[.labels[].name | select(startswith("stale:"))]
+                       | map(sub("stale:";"") | tonumber) | max // 0' <<< "$PRJSON")
+            NEXT=$((N + 1))
+            if [ "$NEXT" -gt 3 ]; then
+              gh pr edit "$PR" --repo "$REPO" --add-label needs:human
+              gh pr ready "$PR" --repo "$REPO"
+              gh pr comment "$PR" --repo "$REPO" --body \
+                "The verdict has gone stale $N times — the branch is pushed to faster than it can be reviewed. A human should look (ADR 0009, guard 2)."
+            else
+              # An `if`, not `[ ... ] && ...` — see `NOTES.md` 24.
+              if [ "$N" -gt 0 ]; then
+                gh pr edit "$PR" --repo "$REPO" --remove-label "stale:$N"
+              fi
+              gh pr edit "$PR" --repo "$REPO" --add-label "stale:$NEXT"
+              gh pr comment "$PR" --repo "$REPO" --body \
+                "Not merging: the latest verdict is for a commit that is no longer the head ($HEAD). The push that replaced it starts its own CI run, and the review of that commit decides (ADR 0009, guard 2)."
+            fi
+            echo "go=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
 
           case "$V" in
             merge)
@@ -409,9 +455,14 @@ jobs:
               # and four of them 422. That matters: the secondary rate limit is
               # 80 content-generating requests a minute, 500 an hour, and it is
               # shared across every job in the repository.
-              REMOVE=$(jq -r '[.labels[].name | select(startswith("strike:"))] | join(",")' \
-                         <<< "$PRJSON")
-              [ -n "$REMOVE" ] && gh pr edit "$PR" --repo "$REPO" --remove-label "$REMOVE"
+              # `stale:` resets here too. It counts races with a pusher, and a
+              # verdict that finally names the head means the race is over.
+              REMOVE=$(jq -r '[.labels[].name
+                               | select(startswith("strike:") or startswith("stale:"))]
+                              | join(",")' <<< "$PRJSON")
+              if [ -n "$REMOVE" ]; then
+                gh pr edit "$PR" --repo "$REPO" --remove-label "$REMOVE"
+              fi
               echo "go=true" >> "$GITHUB_OUTPUT" ;;
             rework)
               gh pr edit "$PR" --repo "$REPO" --add-label needs:rework
