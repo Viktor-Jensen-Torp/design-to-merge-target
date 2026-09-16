@@ -73,4 +73,24 @@ describe("slugify", () => {
   it("empty string returns empty string", () => {
     expect(slugify("")).toBe("");
   });
+
+  it("handles em dash", () => {
+    expect(slugify("Hello — World")).toBe("hello-world");
+  });
+
+  it("handles en dash", () => {
+    expect(slugify("Hello – World")).toBe("hello-world");
+  });
+
+  it("handles non-breaking hyphen", () => {
+    expect(slugify("non‑breaking")).toBe("non-breaking");
+  });
+
+  it("handles figure dash", () => {
+    expect(slugify("figure‒dash")).toBe("figure-dash");
+  });
+
+  it("handles mixed exotic dashes", () => {
+    expect(slugify("a—–‑‒b")).toBe("a-b");
+  });
 });
