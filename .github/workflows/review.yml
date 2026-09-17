@@ -385,16 +385,39 @@ jobs:
             || { echo "::error::.pi/extensions/submit.ts missing — the role has no way to post a verdict"; exit 1; }
           test -s .pi/extensions/protect.ts \
             || { echo "::error::.pi/extensions/protect.ts missing — the root of trust is unguarded in-loop"; exit 1; }
+          test -s .pi/extensions/sanity.ts \
+            || { echo "::error::.pi/extensions/sanity.ts missing — corrupted tool arguments would go unnoticed"; exit 1; }
           test -s AGENTS.md \
             || { echo "::error::AGENTS.md is not in the checkout — this role is told to read it"; exit 1; }
           echo "role instructions: $(wc -c < .agents/reviewer.md) bytes"
 
-          cat > "$RUNNER_TEMP/prompt.md" <<PROMPT
-          Review pull request #$PR in $REPO, following .agents/reviewer.md.
+          # On a first review the comments and reviews endpoints are both empty,
+          # and the role file lists both as things to read — so it spends two
+          # turns and ~15k input tokens learning that a pull request opened
+          # minutes ago has no conversation (`docs/run-audit-issue-71.md` R2).
+          # We know which case it is. Say so.
+          NCOMMENTS=$(gh api "repos/$REPO/issues/$PR/comments" --jq 'length' 2>/dev/null || echo 0)
+          NREVIEWS=$(gh api "repos/$REPO/pulls/$PR/reviews" --jq 'length' 2>/dev/null || echo 0)
+          if [ "$NCOMMENTS" = "0" ] && [ "$NREVIEWS" = "0" ]; then
+            HISTORY="This is the FIRST review of this pull request. It carries no comments and
+          no previous reviews — both are empty, so do not spend turns fetching them.
+          The plan in the body and the diff are all there is to read."
+          else
+            HISTORY="This pull request already carries $NCOMMENTS comment(s) and $NREVIEWS review(s).
+          Read them: anything a person wrote outranks anything an agent wrote, and a
+          previous verdict of your own may be among them."
+          fi
 
-          That file holds the passes to run, what counts as Important rather
-          than a nit, the nit cap, what not to report, and the exact shape of
-          the verdict. Follow it rather than improvising a format.
+          cat > "$RUNNER_TEMP/prompt.md" <<PROMPT
+          Review pull request #$PR in $REPO.
+
+          Your role instructions are **already in your system prompt** — the
+          whole of .agents/reviewer.md, holding the passes to run, what counts
+          as Important rather than a nit, the nit cap, what not to report, and
+          the shape of the verdict. **Do not read that file**; you are holding
+          it. Follow it rather than improvising a format.
+
+          $HISTORY
           PROMPT
 
           # The driver, for the same reason the other two roles have one: `pi`
@@ -775,8 +798,10 @@ jobs:
           # (`docs/run-audit-issue-48.md`, G1). A fact in the prompt costs
           # nine words; a fact the model must infer costs it every turn.
           cat > "$RUNNER_TEMP/prompt.md" <<PROMPT
-          Decide whether pull request #$PR in $REPO merges to develop,
-          following .agents/gatekeeper.md.
+          Decide whether pull request #$PR in $REPO merges to develop.
+
+          Your role instructions are **already in your system prompt** — the
+          whole of .agents/gatekeeper.md. Do not read that file.
 
           These are established. Do not re-derive them:
 
@@ -793,8 +818,8 @@ jobs:
           GitHub then refuses the merge itself if the head has moved since the
           review, so the commit that merges is always the commit that was read.
 
-          .agents/gatekeeper.md holds when to merge, when to escalate, and the
-          exact commands that end the run either way. There is no third ending.
+          Those instructions hold when to merge, when to escalate, and the exact
+          commands that end the run either way. There is no third ending.
           PROMPT
 
           # The driver, for the same reason the implementer has one: `pi` exits

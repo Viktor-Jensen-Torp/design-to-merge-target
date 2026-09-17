@@ -25,6 +25,7 @@ harness reads (`docs/adr/0008`).
 | `models.json` | sampling and provider routing, per model |
 | `extensions/submit.ts` | the terminating tool each role finishes with |
 | `extensions/protect.ts` | refuses writes to the root of trust, in-loop |
+| `extensions/sanity.ts` | refuses a tool call whose arguments have stopped making sense |
 
 ## `extensions/submit.ts`
 
@@ -57,6 +58,19 @@ diff costs the run.
 
 **It is hygiene, not containment.** Every role holds `bash`, and `bash` writes
 files. `security.md` is explicit that project trust is not a sandbox.
+
+## `extensions/sanity.ts`
+
+Blocks a tool call whose arguments contain the model's own framing as literal
+text — `<tool_call>`, `<function=`, `<parameter=`, chat-template markers. On
+2026-09-17 the implementer sent a `bash` call whose `path` held exactly that,
+plus a `.php` file that does not exist here, and every existing signal said the
+turn was healthy: the tool succeeded, `isError` was false, `stopReason` was
+`toolUse` (`NOTES.md` 56).
+
+It does **not** match a bare `<`. This is TypeScript — `Set<string>`,
+`Iterable<string>`, `a < b` — and a marker has to be something no honest value
+contains.
 
 Extensions are transpiled, not typechecked. Run the spike after editing this
 file — a type error here surfaces as a broken production run, not a build

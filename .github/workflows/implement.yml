@@ -132,6 +132,8 @@ jobs:
             || { echo "::error::.pi/extensions/submit.ts missing — the role is told to call submit_implementation"; exit 1; }
           test -s .pi/extensions/protect.ts \
             || { echo "::error::.pi/extensions/protect.ts missing — the root of trust is unguarded in-loop"; exit 1; }
+          test -s .pi/extensions/sanity.ts \
+            || { echo "::error::.pi/extensions/sanity.ts missing — corrupted tool arguments would go unnoticed"; exit 1; }
 
       # The agent is GIVEN the issue. It is not asked to find it.
       #
@@ -180,7 +182,9 @@ jobs:
           # Built in a file, so nothing in the issue body is re-parsed by the
           # shell on its way to the model.
           {
-            printf 'Implement issue #%s in %s, following .agents/implementer.md.\n\n' "$N" "$REPO"
+            printf 'Implement issue #%s in %s.\n\n' "$N" "$REPO"
+            printf 'Your role instructions are already in your system prompt —\n'
+            printf 'the whole of .agents/implementer.md. Do not read that file.\n\n'
             printf 'The issue is reproduced below IN FULL. Do not go looking for it —\n'
             printf 'you already have it. Its acceptance criteria are what you are judged on.\n\n'
             printf -- '----- BEGIN ISSUE #%s -----\n' "$N"
