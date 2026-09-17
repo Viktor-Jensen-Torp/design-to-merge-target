@@ -44,6 +44,7 @@ jobs:
       blocked: ${{ steps.conflict.outputs.blocked }}
       risky: ${{ steps.risk.outputs.risky }}
       reasons: ${{ steps.risk.outputs.reasons }}
+      reviewed: ${{ steps.already.outputs.reviewed }}
     steps:
       - uses: actions/create-github-app-token@v2
         id: token
@@ -179,6 +180,36 @@ jobs:
       # ADR 0006: most of the escalation list is authority, not correctness, and
       # authority is a grep over changed paths. Run it deterministically so the
       # cheap, reliable escalations never depend on a model noticing.
+      # Reviewing is not idempotent, and CI can complete more than once for the
+      # same commit — a re-run, a `merge_group` build, a retried job. On
+      # 2026-09-17 a CI re-run sent the reviewer at a pull request it had
+      # already APPROVED; it came back COMMENTED, the router read the LAST
+      # review, and an approved change was escalated to a human (`NOTES.md` 53).
+      #
+      # A verdict is about a commit. If one already exists for this exact head,
+      # the question has been answered and asking again can only disagree.
+      - name: Has this head already been judged?
+        id: already
+        if: steps.pr.outputs.number != '' && steps.pr.outputs.green == 'true'
+        env:
+          GH_TOKEN: ${{ steps.token.outputs.token }}
+          PR: ${{ steps.pr.outputs.number }}
+          REPO: ${{ github.repository }}
+        run: |
+          HEAD=$(gh pr view "$PR" --repo "$REPO" --json headRefOid --jq .headRefOid)
+          R=$(gh api "repos/$REPO/pulls/$PR/reviews" \
+                --jq "[.[] | select(.state != \"PENDING\")
+                           | select(.user.login | endswith(\"[bot]\"))] | last // empty")
+          AT=$(jq -r '.commit_id // ""' <<< "${R:-null}")
+          if [ -n "$R" ] && [ "$AT" = "$HEAD" ]; then
+            echo "A $(jq -r .state <<< "$R") review already exists for $HEAD."
+            echo "Skipping the reviewer; the gatekeeper acts on the verdict that exists."
+            echo "reviewed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "No verdict for $HEAD yet."
+            echo "reviewed=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Deterministic risk check
         id: risk
         if: steps.pr.outputs.number != '' && steps.pr.outputs.green == 'true'
@@ -402,7 +433,8 @@ jobs:
     # problem, and now says so.
     if: ${{ !cancelled()
         && needs.triage.outputs.number != '' && needs.triage.outputs.green == 'true'
-        && needs.triage.outputs.blocked != 'true' }}
+        && needs.triage.outputs.blocked != 'true'
+        && needs.triage.outputs.reviewed != 'true' }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
     # No `concurrency: merge` here. ADR 0010 — `develop` requires a merge queue,
