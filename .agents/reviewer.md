@@ -26,7 +26,7 @@ CI is already green. That is a precondition, not something for you to check.
    tool call reading it.
 
 **The code is not on disk.** Your checkout holds `.agents/`, `.pi/`, `AGENTS.md`
-and `scripts/` and nothing else — no `lib/`, no `app/`. `cat`, `read` and `ls`
+and one script, and nothing else — no `lib/`, no `app/`. `cat`, `read` and `ls`
 on a source file will fail, and `git diff` shows nothing. The diff from
 `gh pr diff` is the whole of what you can see, and that is deliberate (`0004`):
 a reviewer once approved code that was never pushed by reading its own worktree.

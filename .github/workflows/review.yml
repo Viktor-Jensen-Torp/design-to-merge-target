@@ -87,11 +87,11 @@ jobs:
       # normal lookup below finds nothing. The pull request number has to come
       # out of the branch name instead.
       #
-      # UNVERIFIED: GitHub documents the prefix `gh-readonly-queue/{base}` but
-      # not the rest of the format. The `pr-<n>` segment is assumed. Confirm it
-      # on the first queued run and record it in NOTES.md — if it is wrong, this
-      # step silently does nothing, which is the failure shape this repo exists
-      # to avoid.
+      # VERIFIED 2026-09-15 (`NOTES.md` 16, Q5). GitHub documents only the
+      # prefix `gh-readonly-queue/{base}`; the observed name is
+      # `gh-readonly-queue/develop/pr-2-<base_sha>`, so the `pr-<n>` parse below
+      # is correct. It is still guarded: if the format ever changes, this step
+      # warns and does nothing, which is a silent door.
       - name: Ejected from the merge queue
         id: ejected
         # Same reasoning as the step above, and the same bug it fixes: a
@@ -278,15 +278,11 @@ jobs:
       # (`NOTES.md` 41). The gatekeeper has the same instruction and had the same
       # hole.
       #
-      # It is not source. `0004` forbids this role reading a local worktree of
-      # the change under review; AGENTS.md is a repository convention document
-      # and comes from the DEFAULT BRANCH like the role files, so a pull request
-      # cannot rewrite the standards it is judged against.
-      # ADR 0004 forbids this role reading a local worktree, and a sparse
-      # checkout of these two paths keeps that intact while making --skill
-      # resolvable. It also comes from the DEFAULT BRANCH in a workflow_run job,
-      # which is the property we want: a pull request cannot rewrite the
-      # instructions of the role that judges it.
+      # None of it is source. `0004` forbids this role a worktree of the change
+      # under review, and a sparse checkout of these four paths keeps that
+      # intact. Everything here comes from the DEFAULT BRANCH, which in a
+      # workflow_run job is the property we want: a pull request cannot rewrite
+      # the instructions, the conventions or the tooling that judge it.
       - uses: actions/checkout@v5
         with:
           sparse-checkout: |
@@ -402,7 +398,7 @@ jobs:
           # On a first review the comments and reviews endpoints are both empty,
           # and the role file lists both as things to read — so it spends two
           # turns and ~15k input tokens learning that a pull request opened
-          # minutes ago has no conversation (`docs/run-audit-issue-71.md` R2).
+          # minutes ago has no conversation.
           # We know which case it is. Say so.
           NCOMMENTS=$(gh api "repos/$REPO/issues/$PR/comments" --jq 'length' 2>/dev/null || echo 0)
           NREVIEWS=$(gh api "repos/$REPO/pulls/$PR/reviews" --jq 'length' 2>/dev/null || echo 0)
@@ -450,7 +446,7 @@ jobs:
           if-no-files-found: warn
           retention-days: 7
 
-  # ── The authority. Serial, so two merges never race.
+  # ── The authority. The only role that can merge.
   gatekeep:
     needs: [triage, review]
     # `!cancelled()`, because the reviewer's step can now FAIL rather than
@@ -554,10 +550,18 @@ jobs:
           # GitHub — `state` is the decision and `commit_id` is what was judged.
           # Nothing here parses prose a model wrote.
           #
-          # `0013`: the last review **by the reviewer App**, not by anyone. A
-          # person leaving a COMMENTED review must not silently become the
-          # verdict, and a person approving must not become one either —
-          # approving is not how a human authorises a merge here (`0005`).
+          # `0013`: the last review that is not a person's. A human leaving a
+          # COMMENTED review must not silently become the verdict, and a human
+          # approving must not become one either — approving is not how a person
+          # authorises a merge here (`0005`).
+          #
+          # NOT YET as narrow as `0013` asks. `0013` says "the last review by the
+          # reviewer App"; this matches ANY `[bot]`. It is correct today because
+          # the reviewer is the only App that reviews — the gatekeeper and
+          # releaser never do — but it is correct by circumstance rather than by
+          # construction. Narrowing it needs the reviewer App's slug in this job,
+          # which mints the GATEKEEPER token, so it is a real change and not a
+          # comment fix.
           REVIEWS=$(gh api "repos/$REPO/pulls/$PR/reviews")
           R=$(jq -c '[.[] | select(.state != "PENDING")
                           | select(.user.login | endswith("[bot]"))] | last // empty' <<< "$REVIEWS")
@@ -693,7 +697,7 @@ jobs:
               # Edit our own previous escalation rather than adding another.
               # Three failed runs on #54 left three identical comments, and the
               # next reviewer read them all as current context
-              # (`docs/run-audit-issue-48.md`, R2). An escalation is a state,
+              # (`NOTES.md` 51). An escalation is a state,
               # not an event log.
               MARK="<!-- escalation:reviewer-unsure -->"
               BODY="$MARK
@@ -739,15 +743,11 @@ jobs:
       # (`NOTES.md` 41). The gatekeeper has the same instruction and had the same
       # hole.
       #
-      # It is not source. `0004` forbids this role reading a local worktree of
-      # the change under review; AGENTS.md is a repository convention document
-      # and comes from the DEFAULT BRANCH like the role files, so a pull request
-      # cannot rewrite the standards it is judged against.
-      # ADR 0004 forbids this role reading a local worktree, and a sparse
-      # checkout of these two paths keeps that intact while making --skill
-      # resolvable. It also comes from the DEFAULT BRANCH in a workflow_run job,
-      # which is the property we want: a pull request cannot rewrite the
-      # instructions of the role that judges it.
+      # None of it is source. `0004` forbids this role a worktree of the change
+      # under review, and a sparse checkout of these four paths keeps that
+      # intact. Everything here comes from the DEFAULT BRANCH, which in a
+      # workflow_run job is the property we want: a pull request cannot rewrite
+      # the instructions, the conventions or the tooling that judge it.
       - uses: actions/checkout@v5
         if: steps.verdict.outputs.go == 'true'
         with:
@@ -797,7 +797,7 @@ jobs:
           # 2026-09-17 it threw it away — so the role re-derived it from the
           # thread and then re-justified it on every turn, spending 4,263
           # output tokens to make one decision and write no code
-          # (`docs/run-audit-issue-48.md`, G1). A fact in the prompt costs
+          # (`NOTES.md` 51). A fact in the prompt costs
           # nine words; a fact the model must infer costs it every turn.
           cat > "$RUNNER_TEMP/prompt.md" <<PROMPT
           Decide whether pull request #$PR in $REPO merges to develop.

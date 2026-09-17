@@ -51,7 +51,7 @@ its way.
 
 No `--squash`, and no `--delete-branch`. Under a merge queue GitHub **refuses**
 both: the merge method comes from the ruleset, and the queue deletes the branch
-itself. Passing either fails the command outright (`NOTES.md` section 17c).
+itself. Passing either fails the command outright.
 
 `develop` requires a merge queue, so that command **enqueues** rather than
 merging. Success means the pull request is in the queue, not that it has landed.

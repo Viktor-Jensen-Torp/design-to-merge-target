@@ -5,7 +5,7 @@
 #
 # It derives the list from the COMMIT RANGE, not by sweeping the `in:develop`
 # label. Sweeping would be wrong whenever `develop` has moved on since the
-# was cut: those issues carry the label but are not in this release, and closing
+# release was opened: those issues carry the label but are not in it, and closing
 # them would report work as shipped that is still sitting in `develop`.
 #
 # This depends on the two merge methods being DIFFERENT, deliberately:
