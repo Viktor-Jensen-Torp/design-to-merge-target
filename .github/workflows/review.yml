@@ -15,8 +15,8 @@
 # Goes in the TARGET repo at .github/workflows/review.yml.
 #
 # Requires, in the target repo:
-#   vars.REVIEWER_APP_ID    secrets.REVIEWER_APP_PRIVATE_KEY
-#   vars.GATEKEEPER_APP_ID  secrets.GATEKEEPER_APP_PRIVATE_KEY
+#   vars.REVIEWER_CLIENT_ID    secrets.REVIEWER_APP_PRIVATE_KEY
+#   vars.GATEKEEPER_CLIENT_ID  secrets.GATEKEEPER_APP_PRIVATE_KEY
 #   secrets.OPENROUTER_API_KEY
 #   vars.REVIEW_MODEL              vars.GATEKEEP_MODEL
 
@@ -46,10 +46,10 @@ jobs:
       reasons: ${{ steps.risk.outputs.reasons }}
       reviewed: ${{ steps.already.outputs.reviewed }}
     steps:
-      - uses: actions/create-github-app-token@v2
+      - uses: actions/create-github-app-token@v3
         id: token
         with:
-          app-id: ${{ vars.REVIEWER_APP_ID }}
+          client-id: ${{ vars.REVIEWER_CLIENT_ID }}
           private-key: ${{ secrets.REVIEWER_APP_PRIVATE_KEY }}
 
       # A CANCELLED CI run is not a red build. `ci.yml` cancels the run in
@@ -260,10 +260,10 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
-      - uses: actions/create-github-app-token@v2
+      - uses: actions/create-github-app-token@v3
         id: token
         with:
-          app-id: ${{ vars.REVIEWER_APP_ID }}
+          client-id: ${{ vars.REVIEWER_CLIENT_ID }}
           private-key: ${{ secrets.REVIEWER_APP_PRIVATE_KEY }}
           permission-pull-requests: write
           permission-contents: read
@@ -296,7 +296,7 @@ jobs:
             scripts/pi-driver.py
           sparse-checkout-cone-mode: false
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: 22
       - name: Install Pi
@@ -443,7 +443,7 @@ jobs:
 
       - name: Keep the transcript
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: rpc-reviewer-pr-${{ needs.triage.outputs.number }}
           path: ${{ runner.temp }}/rpc.jsonl
@@ -471,10 +471,10 @@ jobs:
     # so GitHub serialises. `gh pr merge` enqueues rather than merging, and the
     # queue builds each entry against the base plus everything ahead of it.
     steps:
-      - uses: actions/create-github-app-token@v2
+      - uses: actions/create-github-app-token@v3
         id: token
         with:
-          app-id: ${{ vars.GATEKEEPER_APP_ID }}
+          client-id: ${{ vars.GATEKEEPER_CLIENT_ID }}
           private-key: ${{ secrets.GATEKEEPER_APP_PRIVATE_KEY }}
 
       # ADR 0006 allows no third ending. This says what the endings ARE, once,
@@ -758,7 +758,7 @@ jobs:
             scripts/pi-driver.py
           sparse-checkout-cone-mode: false
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         if: steps.verdict.outputs.go == 'true'
         with:
           node-version: 22
@@ -844,7 +844,7 @@ jobs:
 
       - name: Keep the transcript
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: rpc-gatekeeper-pr-${{ needs.triage.outputs.number }}
           path: ${{ runner.temp }}/rpc.jsonl
