@@ -25,6 +25,8 @@ harness reads (`docs/adr/0008`).
 | `models.json` | sampling and provider routing, per model |
 | `extensions/submit.ts` | the terminating tool each role finishes with |
 | `extensions/protect.ts` | refuses writes to the root of trust, in-loop |
+| `extensions/sanity.ts` | refuses a tool call whose arguments have stopped making sense |
+| `extensions/debug.ts` | records provider traffic. **Off unless `PI_DEBUG_PROVIDER` is set** |
 
 ## `extensions/submit.ts`
 
@@ -58,6 +60,19 @@ diff costs the run.
 **It is hygiene, not containment.** Every role holds `bash`, and `bash` writes
 files. `security.md` is explicit that project trust is not a sandbox.
 
+## `extensions/sanity.ts`
+
+Blocks a tool call whose arguments contain the model's own framing as literal
+text — `<tool_call>`, `<function=`, `<parameter=`, chat-template markers. On
+2026-09-17 the implementer sent a `bash` call whose `path` held exactly that,
+plus a `.php` file that does not exist here, and every existing signal said the
+turn was healthy: the tool succeeded, `isError` was false, `stopReason` was
+`toolUse` (`NOTES.md` 56).
+
+It does **not** match a bare `<`. This is TypeScript — `Set<string>`,
+`Iterable<string>`, `a < b` — and a marker has to be something no honest value
+contains.
+
 Extensions are transpiled, not typechecked. Run the spike after editing this
 file — a type error here surfaces as a broken production run, not a build
 failure.
@@ -84,3 +99,25 @@ Project settings load only after the project is trusted. Non-interactive modes
 (`-p`, `--mode json`, `--mode rpc`) never prompt, so the workflows pass
 `--approve` to trust project-local files for that run. Without it this directory
 is ignored and nothing here applies — silently.
+
+## `extensions/debug.ts`
+
+Off unless `PI_DEBUG_PROVIDER` is set, so it costs nothing on an ordinary run.
+
+    PI_DEBUG_PROVIDER=1      one summary line per request and per response
+    PI_DEBUG_PROVIDER=full   also writes each payload to $PI_DEBUG_DIR
+
+It hooks `before_provider_request` and `after_provider_response`, which are the
+native answers to "what did we actually send, and what came back". Every such
+question so far was answered by `spikes/pi-probe` — a mock in a scratch
+directory, answering about a request we constructed rather than one we sent.
+
+The summary names the model, the sampling that survived to the wire, the
+OpenRouter `provider` routing block, the tool names, and whether any tool schema
+still carries `anyOf`/`const` — the dialect that would break `submit_review` on
+a Google model (`NOTES.md` 56). The response line names the status and any
+`x-ratelimit-*` or `retry-after` header, and marks anything 400 or above with
+the same `!` the driver uses.
+
+Turn it on when a provider misbehaves. `NOTES.md` 47 and 50 were both diagnosed
+by inference from `stopReason` and an error string; both are one line here.

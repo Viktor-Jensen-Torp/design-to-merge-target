@@ -40,6 +40,28 @@ const PROTECTED: { pattern: RegExp; why: string }[] = [
 		pattern: /(^|\/)(package\.json|pnpm-lock\.yaml)$/,
 		why: "dependency changes are human work (`0002`)",
 	},
+	// The gate DEFINITIONS, not just the gate runners. `ci.yml` is protected
+	// above, so the `test` job cannot be deleted — but until 2026-09-17 nothing
+	// stopped an `ignores` entry in the eslint config, a relaxed `strict` in
+	// tsconfig, or an `exclude` in the vitest config that quietly stops
+	// collecting a failing test file. Every gate then reports green and no diff
+	// is escalated. `AGENTS.md` forbids it in prose; this is the mechanism.
+	{
+		pattern: /(^|\/)eslint\.config\.(mjs|cjs|js|ts)$/,
+		why: "the eslint config decides what `pnpm lint` even checks",
+	},
+	{
+		pattern: /(^|\/)tsconfig(\.[a-z]+)?\.json$/,
+		why: "tsconfig decides what `pnpm typecheck` even checks",
+	},
+	{
+		pattern: /(^|\/)vitest\.config\.[a-z]+$/,
+		why: "the vitest config decides which files are collected as tests",
+	},
+	{
+		pattern: /(^|\/)\.prettierignore$/,
+		why: "`.prettierignore` decides what `format:check` skips",
+	},
 ];
 
 export default function (pi: ExtensionAPI) {
