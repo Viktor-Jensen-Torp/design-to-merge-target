@@ -25,8 +25,14 @@ CI is already green. That is a precondition, not something for you to check.
    is **already in your context**; Pi loads it at startup, so do not spend a
    tool call reading it.
 
-**Never read a local worktree.** `git diff` is not the pull request. A reviewer
-has already approved code that was never pushed by doing exactly this.
+**The code is not on disk.** Your checkout holds `.agents/`, `.pi/`, `AGENTS.md`
+and `scripts/` and nothing else — no `lib/`, no `app/`. `cat`, `read` and `ls`
+on a source file will fail, and `git diff` shows nothing. The diff from
+`gh pr diff` is the whole of what you can see, and that is deliberate (`0004`):
+a reviewer once approved code that was never pushed by reading its own worktree.
+
+This is a fact about your environment, not a rule to work around. On 2026-09-16
+a review spent a turn on `cat lib/is-slug.ts` before believing it.
 
 ## Passes
 
@@ -113,6 +119,12 @@ The severity of your findings decides it. Nothing else does.
 on its line and approve; it is recorded where a reader will find it, and the
 change merges. Requesting changes over a nit costs a whole implement run to fix
 something you had already said was minor.
+
+**A nit must be actionable.** It names something to change. "This is correct",
+"covers all the cases", "the property check is right" are not nits and are not
+findings — they are praise, and praise costs a comment slot and a reader's
+attention while telling them nothing they can act on. If you have nothing to
+say about a line, say nothing about it. Zero nits is a normal review.
 
 **A question is a `COMMENT`, never a `REQUEST_CHANGES`.** There is nobody to
 answer it otherwise: the implementer reads findings during rework and treats

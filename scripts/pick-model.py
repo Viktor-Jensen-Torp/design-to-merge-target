@@ -37,10 +37,17 @@ unable to explain your own config six weeks later.
     ./pick-model.py --paid               # include models that cost money
     ./pick-model.py --pin temperature,top_p
     ./pick-model.py --no-tools      # for a role that never calls a tool
+    ./pick-model.py --check .pi/models.json   # does our config match reality?
+
+`--check` is the half that would have caught the trap rather than explaining it
+afterwards: it reads a models.json and asks OpenRouter whether every model in it
+still exists, still has the endpoints it had, and still supports every parameter
+we pin. Run it in CI and the `top_p`-on-laguna class of bug cannot reach a run.
 """
 
 import argparse
 import json
+import pathlib
 import subprocess
 import sys
 import urllib.request
@@ -84,6 +91,84 @@ def ask(question, reason, default=True):
     return a.startswith("y")
 
 
+# Keys inside `samplingParams` that are NOT sampling parameters and must not be
+# checked against a provider's `supported_parameters`.
+NOT_SAMPLING = {"provider"}
+
+
+def check_config(path):
+    """Validate a models.json against OpenRouter. Returns an exit code.
+
+    Answers the three questions that have each cost us a run:
+      - does this model still exist?
+      - how many endpoints serve it, and is that one?
+      - does every endpoint honour every parameter we pin?
+    The third only bites with `require_parameters: true`, so it is reported as
+    fatal when that is set and as a warning when it is not.
+    """
+    try:
+        cfg = json.loads(pathlib.Path(path).read_text())
+    except Exception as e:
+        print(f"cannot read {path}: {e}")
+        return 2
+
+    overrides = (cfg.get("providers", {}).get("openrouter", {})
+                    .get("modelOverrides", {}) or {})
+    if not overrides:
+        print(f"{path}: no providers.openrouter.modelOverrides — nothing to check")
+        return 0
+
+    print(f"Checking {len(overrides)} model(s) in {path} against OpenRouter.\n")
+    bad = 0
+    for model, conf in sorted(overrides.items()):
+        sampling = {k: v for k, v in (conf.get("samplingParams") or {}).items()
+                    if k not in NOT_SAMPLING}
+        routing = ((conf.get("compat") or {}).get("openRouterRouting") or {})
+        # routing may still be in the old place; check there too rather than
+        # silently passing a config that is actually sending it.
+        legacy = (conf.get("samplingParams") or {}).get("provider") or {}
+        strict = bool(routing.get("require_parameters") or legacy.get("require_parameters"))
+
+        d = curl(f"{API}/models/{model}/endpoints")
+        eps = ((d or {}).get("data") or {}).get("endpoints") or []
+        print(f"  {model}")
+        if legacy:
+            print("    ! routing lives in samplingParams.provider; the native field is")
+            print("      compat.openRouterRouting (models.md). Both reach the wire.")
+            bad += 1
+        if not eps:
+            print("    FATAL: no endpoints — the model does not exist or serves nothing")
+            bad += 1
+            continue
+
+        print(f"    {len(eps)} endpoint(s): " + ", ".join(e.get("provider_name", "?") for e in eps))
+        if len(eps) == 1:
+            print("    note: one endpoint, so allow_fallbacks has nowhere to go. Expected on")
+            print("          the free tier; buy redundancy with a BYOK key or a paid slug.")
+
+        for param in sorted(sampling):
+            lacking = [e.get("provider_name", "?") for e in eps
+                       if param not in (e.get("supported_parameters") or [])]
+            if not lacking:
+                continue
+            if len(lacking) == len(eps) and strict:
+                print(f"    FATAL: `{param}` is pinned, NO endpoint supports it, and")
+                print(f"           require_parameters is on -> zero eligible providers.")
+                bad += 1
+            elif strict:
+                print(f"    WARN: `{param}` unsupported by {', '.join(lacking)};")
+                print(f"          require_parameters removes those from routing.")
+            else:
+                print(f"    note: `{param}` ignored by {', '.join(lacking)}.")
+        print()
+
+    if bad:
+        print(f"{bad} problem(s). This config can fail at runtime.")
+        return 1
+    print("No problems.")
+    return 0
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -96,12 +181,17 @@ def main():
     ap.add_argument("--min-context", type=int, default=131072,
                     help="reject models whose context window is below this (default: 131072)")
     ap.add_argument("--top", type=int, default=8, help="how many to show")
+    ap.add_argument("--check", metavar="MODELS_JSON",
+                    help="validate an existing models.json against OpenRouter and exit")
     tools = ap.add_mutually_exclusive_group()
     tools.add_argument("--tools", dest="tools", action="store_true", default=None,
                        help="the role calls tools (default; required by every role today)")
     tools.add_argument("--no-tools", dest="tools", action="store_false",
                        help="the role never calls a tool — do not filter on tool support")
     args = ap.parse_args()
+
+    if args.check:
+        sys.exit(check_config(args.check))
 
     pinned = [p.strip() for p in args.pin.split(",") if p.strip()]
     tier = "paid and free" if args.paid else "free only"
@@ -159,8 +249,10 @@ def main():
             "Require at least 2 endpoints?",
             "A single-provider model has nowhere to fall back to. When Poolside\n"
             "rate-limited laguna-s-2.1 the gatekeeper was stuck for 8+ hours and\n"
-            "`allow_fallbacks: true` could not help. It is not broken — it is\n"
-            "un-redundant.")
+            "`allow_fallbacks: true` could not help.\n"
+            "NOTE: EVERY `:free` variant has exactly one endpoint, so on the free\n"
+            "tier this filter rejects everything. It is meaningful only with\n"
+            "--paid, or alongside a BYOK key that gives you your own quota.")
         if pinned:
             want_params = ask(
                 f"Require every endpoint to support {', '.join(pinned)}?",
@@ -177,8 +269,12 @@ def main():
 
     rows = []
     for m in models:
-        slug = m["id"].rsplit(":", 1)[0] if m["id"].endswith(":free") else m["id"]
-        d = curl(f"{API}/models/{slug}/endpoints")
+        # Ask about the EXACT id, `:free` included. Stripping the suffix asks
+        # about the paid model, which is a different set of providers entirely:
+        # `google/gemma-4-26b-a4b-it` has eleven, `…:free` has one. This script
+        # shipped with that bug and recommended a model on the strength of
+        # redundancy it did not have (`NOTES.md` 50).
+        d = curl(f"{API}/models/{m['id']}/endpoints")
         eps = ((d or {}).get("data") or {}).get("endpoints") or []
         if not eps:
             continue  # disqualifier 2
@@ -195,6 +291,32 @@ def main():
             "quants": quants, "missing": missing,
             "lowbit": sorted({q for q in quants if q in LOW_BIT}),
         })
+
+    if not args.paid:
+        singles = sum(1 for r in rows if r["n"] == 1)
+        if singles == len(rows) and rows:
+            # Applying it anyway would reject every candidate and return
+            # nothing, which is a worse answer than the honest one. Stand the
+            # filter down and say so, loudly.
+            want_multi = False
+            print(f"\n{'='*72}\nEVERY FREE MODEL HERE HAS ONE ENDPOINT\n{'='*72}")
+            print("  All %d of them. A `:free` variant is one provider donating" % len(rows))
+            print("  capacity, so `allow_fallbacks` has nowhere to go and an upstream")
+            print("  rate limit stops the role outright. Redundancy is not available")
+            print("  on the free tier at all.")
+            print()
+            print("  Two ways out, neither of which this script can choose for you:")
+            print("    - BYOK: add your own provider key at")
+            print("      https://openrouter.ai/settings/integrations, and set shared-capacity")
+            print("      fallback to `never` so a quota miss fails loudly instead of")
+            print("      spending OpenRouter credits. Free, and it is what fixed ours.")
+            print("    - --paid: the paid slug of the same model, which does have")
+            print("      several providers. Pennies per run for a role like the gatekeeper.")
+            print()
+            print("  The endpoint filter is STOOD DOWN for this run — applying it would")
+            print("  reject every candidate and tell you nothing. Ranking below is by")
+            print("  context window, and redundancy is a problem you solve with a key,")
+            print("  not by picking a different free model.")
 
     kept, rejected = [], []
     for r in rows:
