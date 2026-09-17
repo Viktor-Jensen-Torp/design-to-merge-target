@@ -23,7 +23,8 @@ Everything runs from the repository root.
 | `pnpm lint` | eslint |
 | `pnpm format:check` | prettier, check only |
 | `pnpm typecheck` | `tsc --noEmit` |
-| `pnpm test` | unit tests, Vitest |
+| `pnpm test` | unit tests, Vitest. Runs once and exits — never watch mode |
+| `pnpm test:watch` | the watching version, for a human at a keyboard |
 | `pnpm build` | production build |
 
 There is **no `test:e2e` and no mutation testing yet** — Playwright and Stryker
@@ -32,6 +33,8 @@ both jobs come back from the design repo rather than being stubbed, because a
 job that exits 0 without checking anything is worse than no job.
 
 A healthy `pnpm test` ends with a line like `Test Files  12 passed (12)`.
+It always terminates. If it ever appears to hang after printing `RUN`, that
+is a defect in the script, not something to wait out.
 A healthy `pnpm typecheck` ends with `tsc` printing nothing and exiting 0. It
 runs `next typegen` first: route and layout types are generated, not written by
 hand, and `tsc` alone cannot see them on a clean checkout.
