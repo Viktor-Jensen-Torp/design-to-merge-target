@@ -15,8 +15,8 @@
 # Goes in the TARGET repo at .github/workflows/review.yml.
 #
 # Requires, in the target repo:
-#   vars.REVIEWER_APP_ID    secrets.REVIEWER_APP_PRIVATE_KEY
-#   vars.GATEKEEPER_APP_ID  secrets.GATEKEEPER_APP_PRIVATE_KEY
+#   vars.REVIEWER_CLIENT_ID    secrets.REVIEWER_APP_PRIVATE_KEY
+#   vars.GATEKEEPER_CLIENT_ID  secrets.GATEKEEPER_APP_PRIVATE_KEY
 #   secrets.OPENROUTER_API_KEY
 #   vars.REVIEW_MODEL              vars.GATEKEEP_MODEL
 
@@ -49,7 +49,7 @@ jobs:
       - uses: actions/create-github-app-token@v3
         id: token
         with:
-          app-id: ${{ vars.REVIEWER_APP_ID }}
+          client-id: ${{ vars.REVIEWER_CLIENT_ID }}
           private-key: ${{ secrets.REVIEWER_APP_PRIVATE_KEY }}
 
       # A CANCELLED CI run is not a red build. `ci.yml` cancels the run in
@@ -263,7 +263,7 @@ jobs:
       - uses: actions/create-github-app-token@v3
         id: token
         with:
-          app-id: ${{ vars.REVIEWER_APP_ID }}
+          client-id: ${{ vars.REVIEWER_CLIENT_ID }}
           private-key: ${{ secrets.REVIEWER_APP_PRIVATE_KEY }}
           permission-pull-requests: write
           permission-contents: read
@@ -474,7 +474,7 @@ jobs:
       - uses: actions/create-github-app-token@v3
         id: token
         with:
-          app-id: ${{ vars.GATEKEEPER_APP_ID }}
+          client-id: ${{ vars.GATEKEEPER_CLIENT_ID }}
           private-key: ${{ secrets.GATEKEEPER_APP_PRIVATE_KEY }}
 
       # ADR 0006 allows no third ending. This says what the endings ARE, once,

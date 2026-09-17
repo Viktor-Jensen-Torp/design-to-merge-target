@@ -39,7 +39,7 @@ jobs:
       - uses: actions/create-github-app-token@v3
         id: token
         with:
-          app-id: ${{ vars.IMPLEMENTER_APP_ID }}
+          client-id: ${{ vars.IMPLEMENTER_CLIENT_ID }}
           private-key: ${{ secrets.IMPLEMENTER_APP_PRIVATE_KEY }}
 
       # ADR 0009 — three CONSECUTIVE strikes, and a separate budget for lost
