@@ -46,7 +46,7 @@ jobs:
       reasons: ${{ steps.risk.outputs.reasons }}
       reviewed: ${{ steps.already.outputs.reviewed }}
     steps:
-      - uses: actions/create-github-app-token@v2
+      - uses: actions/create-github-app-token@v3
         id: token
         with:
           app-id: ${{ vars.REVIEWER_APP_ID }}
@@ -260,7 +260,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
-      - uses: actions/create-github-app-token@v2
+      - uses: actions/create-github-app-token@v3
         id: token
         with:
           app-id: ${{ vars.REVIEWER_APP_ID }}
@@ -296,7 +296,7 @@ jobs:
             scripts/pi-driver.py
           sparse-checkout-cone-mode: false
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: 22
       - name: Install Pi
@@ -443,7 +443,7 @@ jobs:
 
       - name: Keep the transcript
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: rpc-reviewer-pr-${{ needs.triage.outputs.number }}
           path: ${{ runner.temp }}/rpc.jsonl
@@ -471,7 +471,7 @@ jobs:
     # so GitHub serialises. `gh pr merge` enqueues rather than merging, and the
     # queue builds each entry against the base plus everything ahead of it.
     steps:
-      - uses: actions/create-github-app-token@v2
+      - uses: actions/create-github-app-token@v3
         id: token
         with:
           app-id: ${{ vars.GATEKEEPER_APP_ID }}
@@ -758,7 +758,7 @@ jobs:
             scripts/pi-driver.py
           sparse-checkout-cone-mode: false
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         if: steps.verdict.outputs.go == 'true'
         with:
           node-version: 22
@@ -844,7 +844,7 @@ jobs:
 
       - name: Keep the transcript
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: rpc-gatekeeper-pr-${{ needs.triage.outputs.number }}
           path: ${{ runner.temp }}/rpc.jsonl
