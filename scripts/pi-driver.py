@@ -100,6 +100,8 @@ def run_check(cmd, cwd):
         cwd=cwd,
         capture_output=True,
         text=True,
+        encoding="utf-8",
+        errors="replace",
     )
     return p.returncode, (p.stdout + p.stderr).strip()
 
@@ -160,8 +162,8 @@ def main():
         log("pi-driver: no pi command given; put it after --")
         return 4
 
-    prompt = open(args.prompt_file).read()
-    nudge_template = open(args.nudge_file).read()
+    prompt = open(args.prompt_file, encoding="utf-8").read()
+    nudge_template = open(args.nudge_file, encoding="utf-8").read()
 
     # If it is already done before the agent runs, the check is vacuous and we
     # would never learn anything. Say so rather than exiting 0 on nothing.
@@ -193,22 +195,36 @@ def main():
     retries = 0
     tool_errors = 0
     stop_reasons = []
-    verdict = None
+    # The tool currently executing, if any: (name, detail, started_at). A stall
+    # is almost always a tool that will not return — `pnpm test` in watch mode
+    # cost a run and 682 seconds, and the driver could only say "no events"
+    # (`NOTES.md` 54). Naming it turns an artifact download into a log line.
+    in_flight = None
+    updates = 0
+    exit_code = None
     tools = []
     streaming_text = False
 
     send({"id": "run", "type": "prompt", "message": prompt})
 
     try:
-        while verdict is None:
+        while exit_code is None:
             now = time.time()
             if now - started > args.timeout:
                 log(f"\npi-driver: total timeout after {args.timeout}s")
-                verdict = 2
+                exit_code = 2
                 break
             if now - last_event > args.idle_timeout:
-                log(f"\npi-driver: no events for {args.idle_timeout}s")
-                verdict = 2
+                if in_flight:
+                    name, detail, since = in_flight
+                    log(
+                        f"\npi-driver: no events for {args.idle_timeout}s. "
+                        f"`{name}` has been running {int(now - since)}s and has not "
+                        f"returned: {detail[:160] or '(no detail)'}"
+                    )
+                else:
+                    log(f"\npi-driver: no events for {args.idle_timeout}s, with no tool running")
+                exit_code = 2
                 break
 
             budget = min(
@@ -218,14 +234,24 @@ def main():
             if not r:
                 if proc.poll() is not None:
                     log("\npi-driver: pi exited before the run settled")
-                    verdict = 3
+                    exit_code = 3
                     break
                 continue
 
-            chunk = proc.stdout.read1(65536) if hasattr(proc.stdout, "read1") else proc.stdout.read(1)
+            # We pass `bufsize=0`, so `proc.stdout` is a raw `FileIO` and has
+            # NO `read1` — only a BufferedReader does. Verified, after a code
+            # review called this branch unreachable and deleting it broke both
+            # arms of `spikes/pi-driver` (`NOTES.md` 61). `read` on a FileIO
+            # returns what is available rather than blocking for the full count,
+            # which is the behaviour this loop needs.
+            chunk = (
+                proc.stdout.read1(65536)
+                if hasattr(proc.stdout, "read1")
+                else proc.stdout.read(65536)
+            )
             if not chunk:
                 log("\npi-driver: pi closed stdout before the run settled")
-                verdict = 3
+                exit_code = 3
                 break
 
             for raw in framer.feed(chunk):
@@ -237,14 +263,14 @@ def main():
                     ev = json.loads(raw)
                 except json.JSONDecodeError:
                     log(f"\npi-driver: not JSON on stdout: {raw[:200]!r}")
-                    verdict = 3
+                    exit_code = 3
                     break
 
                 t = ev.get("type")
 
                 if t == "response" and ev.get("success") is False:
                     log(f"\npi-driver: command {ev.get('command')} failed: {ev.get('error')}")
-                    verdict = 3
+                    exit_code = 3
                     break
 
                 if t == "message_update" and not args.quiet:
@@ -268,8 +294,19 @@ def main():
                     elif a.get("path"):
                         detail = " " + str(a["path"])
                     log(f"  · {name}{detail}")
+                    in_flight = (name, detail.strip(), time.time())
+
+                elif t == "tool_execution_update":
+                    # The only event that fires WHILE a tool runs. Counting them
+                    # separates "this tool is working" from "nothing is
+                    # happening", which the idle timeout alone cannot.
+                    updates += 1
+
+                elif t == "tool_execution_end" and not ev.get("isError"):
+                    in_flight = None
 
                 elif t == "tool_execution_end" and ev.get("isError"):
+                    in_flight = None
                     # The agent sees this text and we did not, which is how a
                     # command that failed for a fixable reason — a missing
                     # binary, a wrong path — looked from the outside exactly
@@ -304,7 +341,7 @@ def main():
                     why = str(ev.get("errorMessage") or "").strip()
                     why = (": " + why[:300].replace("\n", " ⏎ ")) if why else ""
                     log(f"  ~ auto-retry {retries}/{args.max_retries}{why}")
-                    if retries > args.max_retries:
+                    if retries >= args.max_retries:
                         # Without this the run sits here until --timeout fires,
                         # spending the whole budget learning nothing. A provider
                         # that has failed this many times will not recover
@@ -313,7 +350,7 @@ def main():
                             f"pi-driver: {retries} provider retries is past "
                             f"--max-retries {args.max_retries}. Giving up."
                         )
-                        verdict = 5
+                        exit_code = 5
                         break
 
                 elif t == "auto_retry_end" and ev.get("success") is False:
@@ -333,7 +370,7 @@ def main():
                     rc, out = run_check(args.done, args.cwd)
                     if rc == 0:
                         log("pi-driver: settled, and --done passes.")
-                        verdict = 0
+                        exit_code = 0
                         break
                     if nudges >= args.max_nudges:
                         log(
@@ -342,7 +379,7 @@ def main():
                         )
                         if out:
                             log(f"pi-driver: --done said: {out[:800]}")
-                        verdict = 1
+                        exit_code = 1
                         break
                     nudges += 1
                     log(
@@ -355,6 +392,7 @@ def main():
                     # documented way to grant another turn. `follow_up` is for
                     # queueing while it is still streaming.
                     send({
+                        "id": f"nudge-{nudges}",
                         "type": "prompt",
                         "message": nudge_template.replace(
                             "{{done_output}}", out or "(the check printed nothing)"
@@ -391,8 +429,10 @@ def main():
         health.append(f"{tool_errors} tool error(s)")
     if stop_reasons:
         health.append("stopReason " + ",".join(sorted(set(stop_reasons))))
-    log(f"pi-driver: exit {verdict} after {int(time.time() - started)}s, " + ", ".join(health))
-    return verdict if verdict is not None else 3
+    if in_flight:
+        health.append(f"stalled in {in_flight[0]}")
+    log(f"pi-driver: exit {exit_code} after {int(time.time() - started)}s, " + ", ".join(health))
+    return exit_code if exit_code is not None else 3
 
 
 if __name__ == "__main__":

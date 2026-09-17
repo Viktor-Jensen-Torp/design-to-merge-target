@@ -232,6 +232,12 @@ jobs:
           # its own finish condition must not pass unnoticed.
           grep -qE '(^|/)\.pi/'                      <<< "$FILES" && REASONS="$REASONS- touches .pi/ (Pi config and extensions, root of trust)\n"
           grep -qE '(^|/)(package\.json|pnpm-lock\.yaml)$' <<< "$FILES" && REASONS="$REASONS- changes dependencies (ADR 0002)\n"
+          # The gate DEFINITIONS. `.github/` above protects the CI workflow, so
+          # the `test` job cannot be removed — these decide what it checks when
+          # it runs. An `ignores` in the eslint config or an `exclude` in the
+          # vitest config is a loosened gate that reports green.
+          grep -qE '(^|/)(eslint\.config\.[a-z]+|tsconfig([.][a-z]+)?\.json|vitest\.config\.[a-z]+|\.prettierignore)$' \
+            <<< "$FILES" && REASONS="$REASONS- touches a gate definition (lint/types/tests/format config)\n"
           if [ -n "$REASONS" ]; then
             echo "risky=true" >> "$GITHUB_OUTPUT"
             { echo "reasons<<EOF"; printf "%b" "$REASONS"; echo "EOF"; } >> "$GITHUB_OUTPUT"
@@ -385,16 +391,35 @@ jobs:
             || { echo "::error::.pi/extensions/submit.ts missing — the role has no way to post a verdict"; exit 1; }
           test -s .pi/extensions/protect.ts \
             || { echo "::error::.pi/extensions/protect.ts missing — the root of trust is unguarded in-loop"; exit 1; }
+          test -s .pi/extensions/sanity.ts \
+            || { echo "::error::.pi/extensions/sanity.ts missing — corrupted tool arguments would go unnoticed"; exit 1; }
+          test -s .pi/extensions/debug.ts \
+            || { echo "::error::.pi/extensions/debug.ts missing"; exit 1; }
           test -s AGENTS.md \
             || { echo "::error::AGENTS.md is not in the checkout — this role is told to read it"; exit 1; }
           echo "role instructions: $(wc -c < .agents/reviewer.md) bytes"
 
-          cat > "$RUNNER_TEMP/prompt.md" <<PROMPT
-          Review pull request #$PR in $REPO, following .agents/reviewer.md.
+          # On a first review the comments and reviews endpoints are both empty,
+          # and the role file lists both as things to read — so it spends two
+          # turns and ~15k input tokens learning that a pull request opened
+          # minutes ago has no conversation (`docs/run-audit-issue-71.md` R2).
+          # We know which case it is. Say so.
+          NCOMMENTS=$(gh api "repos/$REPO/issues/$PR/comments" --jq 'length' 2>/dev/null || echo 0)
+          NREVIEWS=$(gh api "repos/$REPO/pulls/$PR/reviews" --jq 'length' 2>/dev/null || echo 0)
+          if [ "$NCOMMENTS" = "0" ] && [ "$NREVIEWS" = "0" ]; then
+            HISTORY="This is the FIRST review of this pull request. It carries no comments and
+          no previous reviews — both are empty, so do not spend turns fetching them.
+          The plan in the body and the diff are all there is to read."
+          else
+            HISTORY="This pull request already carries $NCOMMENTS comment(s) and $NREVIEWS review(s).
+          Read them: anything a person wrote outranks anything an agent wrote, and a
+          previous verdict of your own may be among them."
+          fi
 
-          That file holds the passes to run, what counts as Important rather
-          than a nit, the nit cap, what not to report, and the exact shape of
-          the verdict. Follow it rather than improvising a format.
+          cat > "$RUNNER_TEMP/prompt.md" <<PROMPT
+          Review pull request #$PR in $REPO.
+
+          $HISTORY
           PROMPT
 
           # The driver, for the same reason the other two roles have one: `pi`
@@ -775,8 +800,7 @@ jobs:
           # (`docs/run-audit-issue-48.md`, G1). A fact in the prompt costs
           # nine words; a fact the model must infer costs it every turn.
           cat > "$RUNNER_TEMP/prompt.md" <<PROMPT
-          Decide whether pull request #$PR in $REPO merges to develop,
-          following .agents/gatekeeper.md.
+          Decide whether pull request #$PR in $REPO merges to develop.
 
           These are established. Do not re-derive them:
 
@@ -793,8 +817,7 @@ jobs:
           GitHub then refuses the merge itself if the head has moved since the
           review, so the commit that merges is always the commit that was read.
 
-          .agents/gatekeeper.md holds when to merge, when to escalate, and the
-          exact commands that end the run either way. There is no third ending.
+          There is no third ending: it merges, or it is labelled for a human.
           PROMPT
 
           # The driver, for the same reason the implementer has one: `pi` exits

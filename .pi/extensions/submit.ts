@@ -61,6 +61,12 @@ function implementationTool(pi: ExtensionAPI) {
 		promptGuidelines: [
 			"Use submit_implementation as your final action, after the gates pass and you have committed.",
 			"submit_implementation refuses if the working tree is dirty or the branch has no new commit; fix that and call it again.",
+			// The role file has said "do not read your files back" since the
+			// morning of 2026-09-17 and the implementer did it anyway, twice
+			// (`docs/run-audit-issue-71.md` I2). Saying it here puts it beside
+			// the tool the model is about to reach for, rather than in a long
+			// document it read once.
+			"When the gates pass, call submit_implementation immediately. Do not read back files you wrote, do not re-run a gate that already passed, and do not diff a file you never touched — the gates already checked all of it.",
 		],
 		parameters: Type.Object({
 			summary: Type.String({
@@ -194,20 +200,31 @@ function reviewTool(pi: ExtensionAPI) {
 			};
 
 			let anchored = Boolean(params.comments?.length);
-			let result: { ok: boolean; out: string };
+			// Initialised rather than declared: Pi transpiles extensions without
+			// typechecking, so a definite-assignment mistake here would surface
+			// as a runtime error in production rather than a build failure.
+			let result: { ok: boolean; out: string } = { ok: false, out: "not attempted" };
 			try {
 				result = await post(params.body, params.comments);
 
 				if (!result.ok && anchored) {
-					// Almost always a line outside the diff: GitHub rejects the whole
-					// review if one anchor is unusable. Fold the findings into the body
-					// and post again — never lose the verdict over a nit's position.
+					// Usually a line outside the diff: GitHub rejects the whole review
+					// if one anchor is unusable. Fold the findings into the body and
+					// post again — never lose the verdict over a nit's position.
+					//
+					// But this branch catches EVERY first-attempt failure, not only
+					// anchor ones. A 403 or a network fault would also land here and
+					// silently drop the inline comments. So say what happened: the
+					// reason goes into the body, where a reader can see that the
+					// anchors were lost and why, rather than disappearing.
+					const why = result.out.slice(0, 300) || "(GitHub gave no reason)";
 					const folded = (params.comments ?? [])
 						.map((c) => `- \`${c.path}:${c.line}\` — ${c.body}`)
 						.join("\n");
 					anchored = false;
 					result = await post(
-						`${params.body}\n\n## Findings that could not be anchored\n\n${folded}`,
+						`${params.body}\n\n## Findings that could not be anchored\n\n${folded}\n\n` +
+							`<sub>Inline comments were refused and folded in here. GitHub said: ${why}</sub>`,
 						undefined,
 					);
 				}

@@ -221,6 +221,10 @@ jobs:
             || { echo "::error::.pi/extensions/submit.ts missing — the role is told to call submit_implementation"; exit 1; }
           test -s .pi/extensions/protect.ts \
             || { echo "::error::.pi/extensions/protect.ts missing — the root of trust is unguarded in-loop"; exit 1; }
+          test -s .pi/extensions/sanity.ts \
+            || { echo "::error::.pi/extensions/sanity.ts missing — corrupted tool arguments would go unnoticed"; exit 1; }
+          test -s .pi/extensions/debug.ts \
+            || { echo "::error::.pi/extensions/debug.ts missing"; exit 1; }
           python3 --version >/dev/null \
             || { echo "::error::no python3 for the driver"; exit 1; }
           echo "role instructions: $(wc -c < .agents/implementer.md) bytes"
