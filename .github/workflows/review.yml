@@ -411,12 +411,6 @@ jobs:
           cat > "$RUNNER_TEMP/prompt.md" <<PROMPT
           Review pull request #$PR in $REPO.
 
-          Your role instructions are **already in your system prompt** — the
-          whole of .agents/reviewer.md, holding the passes to run, what counts
-          as Important rather than a nit, the nit cap, what not to report, and
-          the shape of the verdict. **Do not read that file**; you are holding
-          it. Follow it rather than improvising a format.
-
           $HISTORY
           PROMPT
 
@@ -800,9 +794,6 @@ jobs:
           cat > "$RUNNER_TEMP/prompt.md" <<PROMPT
           Decide whether pull request #$PR in $REPO merges to develop.
 
-          Your role instructions are **already in your system prompt** — the
-          whole of .agents/gatekeeper.md. Do not read that file.
-
           These are established. Do not re-derive them:
 
           - The reviewer's verdict is **$VERDICT**.
@@ -818,8 +809,7 @@ jobs:
           GitHub then refuses the merge itself if the head has moved since the
           review, so the commit that merges is always the commit that was read.
 
-          Those instructions hold when to merge, when to escalate, and the exact
-          commands that end the run either way. There is no third ending.
+          There is no third ending: it merges, or it is labelled for a human.
           PROMPT
 
           # The driver, for the same reason the implementer has one: `pi` exits

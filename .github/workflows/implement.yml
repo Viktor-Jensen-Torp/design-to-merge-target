@@ -183,8 +183,6 @@ jobs:
           # shell on its way to the model.
           {
             printf 'Implement issue #%s in %s.\n\n' "$N" "$REPO"
-            printf 'Your role instructions are already in your system prompt —\n'
-            printf 'the whole of .agents/implementer.md. Do not read that file.\n\n'
             printf 'The issue is reproduced below IN FULL. Do not go looking for it —\n'
             printf 'you already have it. Its acceptance criteria are what you are judged on.\n\n'
             printf -- '----- BEGIN ISSUE #%s -----\n' "$N"
