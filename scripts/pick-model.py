@@ -37,10 +37,17 @@ unable to explain your own config six weeks later.
     ./pick-model.py --paid               # include models that cost money
     ./pick-model.py --pin temperature,top_p
     ./pick-model.py --no-tools      # for a role that never calls a tool
+    ./pick-model.py --check .pi/models.json   # does our config match reality?
+
+`--check` is the half that would have caught the trap rather than explaining it
+afterwards: it reads a models.json and asks OpenRouter whether every model in it
+still exists, still has the endpoints it had, and still supports every parameter
+we pin. Run it in CI and the `top_p`-on-laguna class of bug cannot reach a run.
 """
 
 import argparse
 import json
+import pathlib
 import subprocess
 import sys
 import urllib.request
@@ -84,6 +91,84 @@ def ask(question, reason, default=True):
     return a.startswith("y")
 
 
+# Keys inside `samplingParams` that are NOT sampling parameters and must not be
+# checked against a provider's `supported_parameters`.
+NOT_SAMPLING = {"provider"}
+
+
+def check_config(path):
+    """Validate a models.json against OpenRouter. Returns an exit code.
+
+    Answers the three questions that have each cost us a run:
+      - does this model still exist?
+      - how many endpoints serve it, and is that one?
+      - does every endpoint honour every parameter we pin?
+    The third only bites with `require_parameters: true`, so it is reported as
+    fatal when that is set and as a warning when it is not.
+    """
+    try:
+        cfg = json.loads(pathlib.Path(path).read_text())
+    except Exception as e:
+        print(f"cannot read {path}: {e}")
+        return 2
+
+    overrides = (cfg.get("providers", {}).get("openrouter", {})
+                    .get("modelOverrides", {}) or {})
+    if not overrides:
+        print(f"{path}: no providers.openrouter.modelOverrides — nothing to check")
+        return 0
+
+    print(f"Checking {len(overrides)} model(s) in {path} against OpenRouter.\n")
+    bad = 0
+    for model, conf in sorted(overrides.items()):
+        sampling = {k: v for k, v in (conf.get("samplingParams") or {}).items()
+                    if k not in NOT_SAMPLING}
+        routing = ((conf.get("compat") or {}).get("openRouterRouting") or {})
+        # routing may still be in the old place; check there too rather than
+        # silently passing a config that is actually sending it.
+        legacy = (conf.get("samplingParams") or {}).get("provider") or {}
+        strict = bool(routing.get("require_parameters") or legacy.get("require_parameters"))
+
+        d = curl(f"{API}/models/{model}/endpoints")
+        eps = ((d or {}).get("data") or {}).get("endpoints") or []
+        print(f"  {model}")
+        if legacy:
+            print("    ! routing lives in samplingParams.provider; the native field is")
+            print("      compat.openRouterRouting (models.md). Both reach the wire.")
+            bad += 1
+        if not eps:
+            print("    FATAL: no endpoints — the model does not exist or serves nothing")
+            bad += 1
+            continue
+
+        print(f"    {len(eps)} endpoint(s): " + ", ".join(e.get("provider_name", "?") for e in eps))
+        if len(eps) == 1:
+            print("    note: one endpoint, so allow_fallbacks has nowhere to go. Expected on")
+            print("          the free tier; buy redundancy with a BYOK key or a paid slug.")
+
+        for param in sorted(sampling):
+            lacking = [e.get("provider_name", "?") for e in eps
+                       if param not in (e.get("supported_parameters") or [])]
+            if not lacking:
+                continue
+            if len(lacking) == len(eps) and strict:
+                print(f"    FATAL: `{param}` is pinned, NO endpoint supports it, and")
+                print(f"           require_parameters is on -> zero eligible providers.")
+                bad += 1
+            elif strict:
+                print(f"    WARN: `{param}` unsupported by {', '.join(lacking)};")
+                print(f"          require_parameters removes those from routing.")
+            else:
+                print(f"    note: `{param}` ignored by {', '.join(lacking)}.")
+        print()
+
+    if bad:
+        print(f"{bad} problem(s). This config can fail at runtime.")
+        return 1
+    print("No problems.")
+    return 0
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -96,12 +181,17 @@ def main():
     ap.add_argument("--min-context", type=int, default=131072,
                     help="reject models whose context window is below this (default: 131072)")
     ap.add_argument("--top", type=int, default=8, help="how many to show")
+    ap.add_argument("--check", metavar="MODELS_JSON",
+                    help="validate an existing models.json against OpenRouter and exit")
     tools = ap.add_mutually_exclusive_group()
     tools.add_argument("--tools", dest="tools", action="store_true", default=None,
                        help="the role calls tools (default; required by every role today)")
     tools.add_argument("--no-tools", dest="tools", action="store_false",
                        help="the role never calls a tool — do not filter on tool support")
     args = ap.parse_args()
+
+    if args.check:
+        sys.exit(check_config(args.check))
 
     pinned = [p.strip() for p in args.pin.split(",") if p.strip()]
     tier = "paid and free" if args.paid else "free only"

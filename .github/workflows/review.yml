@@ -194,6 +194,12 @@ jobs:
           grep -qE '(^|/)AGENTS\.md$'                <<< "$FILES" && REASONS="$REASONS- touches AGENTS.md\n"
           grep -qE '(^|/)\.agents/'                  <<< "$FILES" && REASONS="$REASONS- touches agent role instructions\n"
           grep -qE '(^|/)\.githooks/'                <<< "$FILES" && REASONS="$REASONS- touches the local gates\n"
+          # `.pi/` is root of trust too, and was missed until the docs audit on
+          # 2026-09-16. `.pi/extensions/submit.ts` is the code that decides
+          # whether a role's work is acceptable, and extensions run with full
+          # system permissions inside the job (`security.md`). An agent editing
+          # its own finish condition must not pass unnoticed.
+          grep -qE '(^|/)\.pi/'                      <<< "$FILES" && REASONS="$REASONS- touches .pi/ (Pi config and extensions, root of trust)\n"
           grep -qE '(^|/)(package\.json|pnpm-lock\.yaml)$' <<< "$FILES" && REASONS="$REASONS- changes dependencies (ADR 0002)\n"
           if [ -n "$REASONS" ]; then
             echo "risky=true" >> "$GITHUB_OUTPUT"
@@ -340,6 +346,8 @@ jobs:
           # would have no way to post anything.
           test -s .pi/extensions/submit.ts \
             || { echo "::error::.pi/extensions/submit.ts missing — the role has no way to post a verdict"; exit 1; }
+          test -s .pi/extensions/protect.ts \
+            || { echo "::error::.pi/extensions/protect.ts missing — the root of trust is unguarded in-loop"; exit 1; }
           test -s AGENTS.md \
             || { echo "::error::AGENTS.md is not in the checkout — this role is told to read it"; exit 1; }
           echo "role instructions: $(wc -c < .agents/reviewer.md) bytes"
@@ -601,15 +609,32 @@ jobs:
                 gh pr edit "$PR" --repo "$REPO" --remove-label "$REMOVE"
               fi
               echo "reviewed=$AT" >> "$GITHUB_OUTPUT"
+              echo "verdict=$V" >> "$GITHUB_OUTPUT"
               echo "go=true" >> "$GITHUB_OUTPUT" ;;
             rework)
               gh pr edit "$PR" --repo "$REPO" --add-label needs:rework
               echo "go=false" >> "$GITHUB_OUTPUT" ;;
             unsure|"")
               gh pr edit "$PR" --repo "$REPO" --add-label needs:human
-              gh pr ready "$PR" --repo "$REPO"
-              gh pr comment "$PR" --repo "$REPO" --body \
-                "The reviewer was unsure, or submitted no review at all. A human should look (ADR 0006)."
+              # Edit our own previous escalation rather than adding another.
+              # Three failed runs on #54 left three identical comments, and the
+              # next reviewer read them all as current context
+              # (`docs/run-audit-issue-48.md`, R2). An escalation is a state,
+              # not an event log.
+              MARK="<!-- escalation:reviewer-unsure -->"
+              BODY="$MARK
+          The reviewer was unsure, or submitted no review at all. A human should look (ADR 0006).
+
+          Last checked: $(date -u +%Y-%m-%dT%H:%M:%SZ), run $GITHUB_RUN_ID."
+              EXISTING=$(gh api "repos/$REPO/issues/$PR/comments" \
+                           --jq "[.[] | select(.body | contains(\"$MARK\"))] | last // empty" \
+                         | jq -r '.id // empty')
+              if [ -n "$EXISTING" ]; then
+                gh api -X PATCH "repos/$REPO/issues/comments/$EXISTING" -f body="$BODY" --silent
+                echo "updated the existing escalation comment ($EXISTING)"
+              else
+                gh pr comment "$PR" --repo "$REPO" --body "$BODY"
+              fi
               echo "go=false" >> "$GITHUB_OUTPUT" ;;
           esac
 
@@ -675,6 +700,7 @@ jobs:
           PR: ${{ needs.triage.outputs.number }}
           REPO: ${{ github.repository }}
           REVIEWED: ${{ steps.verdict.outputs.reviewed }}
+          VERDICT: ${{ steps.verdict.outputs.verdict }}
           # This role registers no submit tool, and says so on stderr. Its
           # finish is a merge or an escalation — both `gh` calls the driver's
           # --done check can see directly.
@@ -693,20 +719,33 @@ jobs:
             || { echo "::error::AGENTS.md is not in the checkout — this role is told to read it"; exit 1; }
           echo "role instructions: $(wc -c < .agents/gatekeeper.md) bytes"
 
+          # STATE THE VERDICT. This job already computed it above, and until
+          # 2026-09-17 it threw it away — so the role re-derived it from the
+          # thread and then re-justified it on every turn, spending 4,263
+          # output tokens to make one decision and write no code
+          # (`docs/run-audit-issue-48.md`, G1). A fact in the prompt costs
+          # nine words; a fact the model must infer costs it every turn.
           cat > "$RUNNER_TEMP/prompt.md" <<PROMPT
           Decide whether pull request #$PR in $REPO merges to develop,
           following .agents/gatekeeper.md.
 
-          The reviewer's review was submitted against commit $REVIEWED.
-          If you merge, pin the merge to it:
+          These are established. Do not re-derive them:
+
+          - The reviewer's verdict is **$VERDICT**.
+          - It was submitted against commit $REVIEWED, which is the head.
+
+          Your judgement is whether the change is confined to the scope of the
+          issue it closes — not what the reviewer decided.
+
+          If you merge, pin the merge to that commit:
 
               gh pr merge $PR --repo $REPO --match-head-commit $REVIEWED
 
           GitHub then refuses the merge itself if the head has moved since the
           review, so the commit that merges is always the commit that was read.
 
-          That file holds when to merge, when to escalate, and the exact
-          commands that end the run either way. There is no third ending.
+          .agents/gatekeeper.md holds when to merge, when to escalate, and the
+          exact commands that end the run either way. There is no third ending.
           PROMPT
 
           # The driver, for the same reason the implementer has one: `pi` exits

@@ -8,10 +8,13 @@ Here is what the pull request says right now:
 ```
 
 This is not a new instruction and it does not change your judgement. It is the
-state of the pull request measured after you stopped. Your role instructions
-require one comment that begins `VERDICT:` and names the head SHA you reviewed;
-a verdict naming an older commit is a verdict about code that has since changed.
-Post it, then stop.
+state of the pull request measured after you stopped, and it does not yet
+satisfy the definition of done in your role instructions. Read them again,
+submit the verdict, and then stop.
 
-If you genuinely cannot tell, `VERDICT: unsure` is a real answer and a cheap
-one. Silence is not — it is the one outcome the pipeline cannot act on.
+If you genuinely cannot tell, that is a real answer and a cheap one — your role
+instructions say which event carries it. Silence is not an answer: it is the one
+outcome the pipeline cannot act on.
+
+You have a limited number of these. When they run out the run is recorded as a
+failure and a human is asked to take over.

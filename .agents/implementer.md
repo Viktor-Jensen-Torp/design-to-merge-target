@@ -68,7 +68,15 @@ and if either is untrue it refuses and tells you which — fix that and call it
 again. Three runs have now produced a correct change and ended without
 committing it (`NOTES.md` 1), and the reason was always that nothing asked.
 
-**The gates passing is the end of the work, not the start of a second opinion.**
+**The gates passing is terminal.** When `pnpm lint`, `format:check`, `typecheck`
+and `test` are green and your tests cover the acceptance criteria, the work is
+finished and there is nothing left to establish. Commit and call
+`submit_implementation`. Do not read your files back, do not re-run a gate that
+already passed, and do not `git diff` a file you never touched — on 2026-09-16
+that cost three turns and sixteen thousand tokens to confirm things that were
+already true (`docs/run-audit-issue-48.md`, I4).
+
+**It is the end of the work, not the start of a second opinion.**
 Once `pnpm lint`, `format:check`, `typecheck` and `test` are green and your tests
 cover the acceptance criteria, commit and stop. Do not then re-prove the change
 with one-off `node -e` snippets, and do not go looking for further edge cases to
