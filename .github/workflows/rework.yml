@@ -271,7 +271,7 @@ jobs:
             --log "$RUNNER_TEMP/rpc.jsonl" \
             -- pi --mode rpc --approve \
                   --append-system-prompt "$(cat .agents/implementer.md)" \
-                  --model "${{ vars.IMPLEMENT_MODEL }}"
+                  --model "${{ vars.REWORK_MODEL }}"
 
       # "Assert something changed" used to live here, running the same check
       # after the fact. The driver now runs it while the agent can still act on
