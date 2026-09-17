@@ -18,10 +18,14 @@ This script asks OpenRouter the questions we kept failing to ask.
 
 WHAT IT DOES AND DOES NOT DECIDE FOR YOU
 ----------------------------------------
-Only two things genuinely DISQUALIFY a model here, and they are applied always:
+Only two things genuinely DISQUALIFY a model, and one of them depends on the
+role you are choosing for:
 
-  1. no `tools` support  — every role works by calling tools
-  2. no endpoints        — nothing serves it
+  1. no endpoints        — nothing serves it. Always disqualifying.
+  2. no `tools` support  — disqualifying ONLY for a role that calls tools.
+                           Every role today does, but a summarising or
+                           classifying role need not, and that opens up models
+                           this script would otherwise hide.
 
 Everything else is RISK, not disqualification, and each one is opt-in and
 printed with its reason. A model with one endpoint works perfectly well right
@@ -32,6 +36,7 @@ unable to explain your own config six weeks later.
     ./pick-model.py --yes                # take the defaults, no prompts
     ./pick-model.py --paid               # include models that cost money
     ./pick-model.py --pin temperature,top_p
+    ./pick-model.py --no-tools      # for a role that never calls a tool
 """
 
 import argparse
@@ -91,10 +96,33 @@ def main():
     ap.add_argument("--min-context", type=int, default=131072,
                     help="reject models whose context window is below this (default: 131072)")
     ap.add_argument("--top", type=int, default=8, help="how many to show")
+    tools = ap.add_mutually_exclusive_group()
+    tools.add_argument("--tools", dest="tools", action="store_true", default=None,
+                       help="the role calls tools (default; required by every role today)")
+    tools.add_argument("--no-tools", dest="tools", action="store_false",
+                       help="the role never calls a tool — do not filter on tool support")
     args = ap.parse_args()
 
     pinned = [p.strip() for p in args.pin.split(",") if p.strip()]
     tier = "paid and free" if args.paid else "free only"
+
+    # Whether the role calls tools is a property of the ROLE, not of the model,
+    # so it is asked rather than assumed. Every role in the pipeline today calls
+    # tools — the implementer edits files, the reviewer runs `gh`, and all of
+    # them finish through a `submit_*` tool. A role that only reads and writes
+    # prose would not, and requiring tool support would hide models that suit it
+    # perfectly well.
+    needs_tools = args.tools
+    if needs_tools is None:
+        if args.yes:
+            needs_tools = True
+        else:
+            needs_tools = ask(
+                "Does this role call tools?",
+                "Every role in this pipeline does today: the implementer edits\n"
+                "files, the reviewer runs `gh`, and each finishes by calling a\n"
+                "`submit_*` tool. Answer no only for a role that produces text and\n"
+                "nothing else — it widens the field considerably.")
 
     print(__doc__.split("WHAT IT DOES")[0].rstrip())
     print(f"\n{'='*72}\nLooking at {tier}. Parameters you intend to pin: {', '.join(pinned) or '(none)'}\n{'='*72}")
@@ -108,13 +136,19 @@ def main():
         models = [m for m in models if m["id"].endswith(":free")]
 
     # ---- Disqualifiers. Always applied, because the model cannot work. ----
-    print("\nDISQUALIFIERS — always applied, because the model cannot work at all:")
-    print("  1. no `tools` support — every role in this pipeline works by calling tools")
-    print("  2. no endpoints       — nothing serves it")
-
-    no_tools = [m for m in models if "tools" not in (m.get("supported_parameters") or [])]
-    models = [m for m in models if "tools" in (m.get("supported_parameters") or [])]
-    print(f"\n  {len(no_tools)} rejected: no tool support")
+    print("\nDISQUALIFIERS — applied without asking, because the model cannot do the job:")
+    print("  1. no endpoints       — nothing serves it")
+    if needs_tools:
+        print("  2. no `tools` support — this role calls tools")
+        before = len(models)
+        models = [m for m in models if "tools" in (m.get("supported_parameters") or [])]
+        print(f"\n  {before - len(models)} rejected: no tool support")
+    else:
+        print("  2. tool support NOT required — you said this role never calls a tool")
+        with_tools = sum(1 for m in models
+                         if "tools" in (m.get("supported_parameters") or []))
+        print(f"\n  {len(models) - with_tools} extra models are in scope that a "
+              f"tool-calling role could not use")
 
     # ---- Risks. Opt-in, each with its reason. -----------------------------
     print("\nRISKS — these do not make a model unusable. Each one is your call.")
