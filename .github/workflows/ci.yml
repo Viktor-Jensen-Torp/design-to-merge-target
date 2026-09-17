@@ -89,6 +89,8 @@ jobs:
           node-version: 22
           cache: pnpm
       - run: pnpm install --frozen-lockfile
+      # `--run` is redundant since `test` became `vitest --run`, and stays as a
+      # belt: CI must never be able to hang on a watcher.
       - run: pnpm test --run
 
 
