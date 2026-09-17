@@ -159,8 +159,10 @@ def main():
             "Require at least 2 endpoints?",
             "A single-provider model has nowhere to fall back to. When Poolside\n"
             "rate-limited laguna-s-2.1 the gatekeeper was stuck for 8+ hours and\n"
-            "`allow_fallbacks: true` could not help. It is not broken — it is\n"
-            "un-redundant.")
+            "`allow_fallbacks: true` could not help.\n"
+            "NOTE: EVERY `:free` variant has exactly one endpoint, so on the free\n"
+            "tier this filter rejects everything. It is meaningful only with\n"
+            "--paid, or alongside a BYOK key that gives you your own quota.")
         if pinned:
             want_params = ask(
                 f"Require every endpoint to support {', '.join(pinned)}?",
@@ -177,8 +179,12 @@ def main():
 
     rows = []
     for m in models:
-        slug = m["id"].rsplit(":", 1)[0] if m["id"].endswith(":free") else m["id"]
-        d = curl(f"{API}/models/{slug}/endpoints")
+        # Ask about the EXACT id, `:free` included. Stripping the suffix asks
+        # about the paid model, which is a different set of providers entirely:
+        # `google/gemma-4-26b-a4b-it` has eleven, `…:free` has one. This script
+        # shipped with that bug and recommended a model on the strength of
+        # redundancy it did not have (`NOTES.md` 50).
+        d = curl(f"{API}/models/{m['id']}/endpoints")
         eps = ((d or {}).get("data") or {}).get("endpoints") or []
         if not eps:
             continue  # disqualifier 2
@@ -195,6 +201,32 @@ def main():
             "quants": quants, "missing": missing,
             "lowbit": sorted({q for q in quants if q in LOW_BIT}),
         })
+
+    if not args.paid:
+        singles = sum(1 for r in rows if r["n"] == 1)
+        if singles == len(rows) and rows:
+            # Applying it anyway would reject every candidate and return
+            # nothing, which is a worse answer than the honest one. Stand the
+            # filter down and say so, loudly.
+            want_multi = False
+            print(f"\n{'='*72}\nEVERY FREE MODEL HERE HAS ONE ENDPOINT\n{'='*72}")
+            print("  All %d of them. A `:free` variant is one provider donating" % len(rows))
+            print("  capacity, so `allow_fallbacks` has nowhere to go and an upstream")
+            print("  rate limit stops the role outright. Redundancy is not available")
+            print("  on the free tier at all.")
+            print()
+            print("  Two ways out, neither of which this script can choose for you:")
+            print("    - BYOK: add your own provider key at")
+            print("      https://openrouter.ai/settings/integrations, and set shared-capacity")
+            print("      fallback to `never` so a quota miss fails loudly instead of")
+            print("      spending OpenRouter credits. Free, and it is what fixed ours.")
+            print("    - --paid: the paid slug of the same model, which does have")
+            print("      several providers. Pennies per run for a role like the gatekeeper.")
+            print()
+            print("  The endpoint filter is STOOD DOWN for this run — applying it would")
+            print("  reject every candidate and tell you nothing. Ranking below is by")
+            print("  context window, and redundancy is a problem you solve with a key,")
+            print("  not by picking a different free model.")
 
     kept, rejected = [], []
     for r in rows:
