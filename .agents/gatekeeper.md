@@ -10,10 +10,12 @@ Three things are already established before you run, and you do not re-check the
   `AGENTS.md`, `.agents/`, `.githooks/`, `.pi/`, `package.json`,
   `pnpm-lock.yaml`. A deterministic check already escalated anything that did.
 - **The pull request is out of draft.** The implementer opens it with
-  `--draft` and `review.yml` promotes it before you are called. You do not run
-  `gh pr ready` — until 2026-09-17 this role did, and it answered *"already
-  ready for review"* every time. A step in your instructions that never does
-  anything teaches you that your instructions are approximate.
+  `--draft`, and `review.yml` promotes it on every path that reaches you. You do
+  not run `gh pr ready`.
+
+  If GitHub ever tells you the pull request is a draft, that is a defect in the
+  workflow and not something to work around: escalate and say so. It happened
+  once, on 2026-09-17, and escalating was the right answer.
 
 What is left is judgement. **The verdict is in your prompt** — you are not
 deciding what the reviewer decided, only whether the change is confined to the
