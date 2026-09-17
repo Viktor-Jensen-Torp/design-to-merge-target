@@ -21,7 +21,8 @@ on:
 # two runs and three silent cancellations. See NOTES.md section 5.
 #
 # One group per issue. Implementation is parallel by design (PRD, "Parallel
-# implement, serial merge"); merging is serialised in review.yml instead.
+# implement, queued merge"). Merging is NOT serialised here or in review.yml —
+# `develop` requires a merge queue and GitHub serialises for us (`0010`).
 concurrency:
   group: implement-${{ github.event.issue.number }}
   cancel-in-progress: false
@@ -71,8 +72,6 @@ jobs:
       # and it catches the case this one missed — an issue that needs a
       # dependency without ever using the word.
 
-      # Zone 1 gates. An unconfigured hook is indistinguishable from a passing
-      # one, so assert rather than assume — this was missed twice on Hermes.
       # The agent commits, so git needs an identity. Without one its first
       # `git commit` fails with "Author identity unknown", and on 2026-09-16 the
       # implementer recovered by inventing one — every commit on that branch is
@@ -94,6 +93,8 @@ jobs:
           git config user.email "${id}+${SLUG}[bot]@users.noreply.github.com"
           echo "commits will be authored by ${SLUG}[bot] <${id}+${SLUG}[bot]@users.noreply.github.com>"
 
+      # Zone 1 gates. An unconfigured hook is indistinguishable from a passing
+      # one, so assert rather than assume — this was missed twice on Hermes.
       - name: Arm the local gates
         run: |
           git config core.hooksPath .githooks

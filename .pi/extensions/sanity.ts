@@ -12,7 +12,7 @@
  * a `.php` file that does not exist in a TypeScript repository. The `command`
  * happened to be fine, so the tool succeeded, `isError` was false, and
  * `stopReason` was `toolUse`. Every signal the driver reads said the turn was
- * healthy (`docs/run-audit-issue-71.md` I1).
+ * healthy.
  *
  * That is `NOTES.md` 38 — the token soup — surviving in one argument instead of
  * a whole message. It is the same failure, at a scale small enough that every
