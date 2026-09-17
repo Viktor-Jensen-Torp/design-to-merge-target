@@ -243,8 +243,14 @@ jobs:
   #    side effect is a comment.
   review:
     needs: triage
+    # `reviewed` is triage's answer to "has this exact head already been
+    # judged?". Skipping here rather than in `gatekeep` is the whole point: the
+    # verdict that exists stays the verdict, and the gatekeeper still runs and
+    # acts on it. Guarding the gatekeeper instead would mean a re-run merges
+    # nothing at all.
     if: needs.triage.outputs.number != '' && needs.triage.outputs.green == 'true'
         && needs.triage.outputs.blocked != 'true'
+        && needs.triage.outputs.reviewed != 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -433,8 +439,7 @@ jobs:
     # problem, and now says so.
     if: ${{ !cancelled()
         && needs.triage.outputs.number != '' && needs.triage.outputs.green == 'true'
-        && needs.triage.outputs.blocked != 'true'
-        && needs.triage.outputs.reviewed != 'true' }}
+        && needs.triage.outputs.blocked != 'true' }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
     # No `concurrency: merge` here. ADR 0010 — `develop` requires a merge queue,
