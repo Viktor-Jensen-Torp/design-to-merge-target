@@ -247,15 +247,16 @@ read_pem() {
   return 1
 }
 
-# discover_app_id "App Name": find the numeric App ID from the installation.
-# We look it up rather than asking, because the page shows BOTH an App ID and a
-# Client ID and create-github-app-token@v2 only accepts the numeric App ID. It
-# rejects a Client ID with a *warning* and then fails — an easy hour to lose.
-discover_app_id() {
+# discover_client_id "App Name": find the Client ID from the installation.
+# We look it up rather than asking, because the app's page shows BOTH a numeric
+# App ID and a Client ID, and which one is wanted has changed: `@v2` took only
+# the App ID and failed on a Client ID, `@v3` deprecates `app-id` in favour of
+# `client-id`. Looking it up means the operator never has to know which.
+discover_client_id() {
   local name="$1" slug id
   slug=$(slugify "$name")
   id=$(gh api "orgs/$ORG/installations" \
-        --jq "[.installations[] | select(.app_slug==\"$slug\")][0].app_id" 2>/dev/null || true)
+        --jq "[.installations[] | select(.app_slug==\"$slug\")][0].client_id" 2>/dev/null || true)
   [[ "$id" == "null" ]] && id=""
   printf '%s' "$id"
 }
@@ -287,16 +288,16 @@ setup_app() {
   name="${!nkey}"
   [[ -z "$name" ]] && name="$suggested"
 
-  id=$(discover_app_id "$name")
+  id=$(discover_client_id "$name")
   if [[ -n "$id" ]]; then
-    printf '  %s✓ found%s App ID %s for "%s"\n' "$GREEN" "$RESET" "$id" "$name"
+    printf '  %s✓ found%s Client ID %s for "%s"\n' "$GREEN" "$RESET" "$id" "$name"
   else
     warn "could not find an installation for \"$name\" on $ORG"
     note "  apps currently installed on this org:"
     gh api "orgs/$ORG/installations" \
-      --jq '.installations[] | "     \(.app_id)  \(.app_slug)"' 2>/dev/null || true
+      --jq '.installations[] | "     \(.client_id)  \(.app_slug)"' 2>/dev/null || true
     local mkey="${var}_MANUAL"
-    ask "$mkey" "Numeric App ID (the App ID row, NOT the Client ID):"
+    ask "$mkey" "Client ID (the Client ID row — it starts with Iv23, not the App ID):"
     id="${!mkey}"
   fi
 
@@ -341,7 +342,7 @@ pause "Ready?"
 
 # ── 2 ─────────────────────────────────────────────────────────────────────
 stage "The implementer App"
-setup_app implementer IMPLEMENTER_APP_ID IMPLEMENTER_APP_PRIVATE_KEY \
+setup_app implementer IMPLEMENTER_CLIENT_ID IMPLEMENTER_APP_PRIVATE_KEY \
   "Contents        → Read and write" \
   "Issues          → Read and write" \
   "Pull requests   → Read and write"
@@ -350,7 +351,7 @@ setup_app implementer IMPLEMENTER_APP_ID IMPLEMENTER_APP_PRIVATE_KEY \
 stage "The reviewer App"
 note "Read-only on code. It reads a diff and writes a verdict — it cannot merge."
 printf '\n'
-setup_app reviewer REVIEWER_APP_ID REVIEWER_APP_PRIVATE_KEY \
+setup_app reviewer REVIEWER_CLIENT_ID REVIEWER_APP_PRIVATE_KEY \
   "Contents        → Read-only" \
   "Pull requests   → Read and write"
 
@@ -358,7 +359,7 @@ setup_app reviewer REVIEWER_APP_ID REVIEWER_APP_PRIVATE_KEY \
 stage "The gatekeeper App"
 note "The only App in the pipeline with merge rights (docs/adr/0005)."
 printf '\n'
-setup_app gatekeeper GATEKEEPER_APP_ID GATEKEEPER_APP_PRIVATE_KEY \
+setup_app gatekeeper GATEKEEPER_CLIENT_ID GATEKEEPER_APP_PRIVATE_KEY \
   "Contents        → Read and write" \
   "Issues          → Read and write" \
   "Pull requests   → Read and write"
@@ -367,7 +368,7 @@ setup_app gatekeeper GATEKEEPER_APP_ID GATEKEEPER_APP_PRIVATE_KEY \
 stage "The releaser App"
 note "Moves issues between merged and shipped. No write access to code at all."
 printf '\n'
-setup_app releaser RELEASER_APP_ID RELEASER_APP_PRIVATE_KEY \
+setup_app releaser RELEASER_CLIENT_ID RELEASER_APP_PRIVATE_KEY \
   "Contents        → Read-only" \
   "Issues          → Read and write" \
   "Pull requests   → Read-only"
@@ -419,7 +420,7 @@ printf '\n'
 have_vars=$(gh api "repos/$GH_REPO/actions/variables" --jq '[.variables[].name]|join(" ")' 2>/dev/null || echo "")
 have_secs=$(gh api "repos/$GH_REPO/actions/secrets"   --jq '[.secrets[].name]|join(" ")'   2>/dev/null || echo "")
 missing=0
-for n in IMPLEMENTER_APP_ID REVIEWER_APP_ID GATEKEEPER_APP_ID RELEASER_APP_ID \
+for n in IMPLEMENTER_CLIENT_ID REVIEWER_CLIENT_ID GATEKEEPER_CLIENT_ID RELEASER_CLIENT_ID \
          IMPLEMENT_MODEL REVIEW_MODEL GATEKEEP_MODEL; do
   if [[ " $have_vars " == *" $n "* ]]; then printf '  %s✓%s var    %s\n' "$GREEN" "$RESET" "$n"
   else printf '  %s✗%s var    %s\n' "$RED" "$RESET" "$n"; missing=$((missing+1)); fi

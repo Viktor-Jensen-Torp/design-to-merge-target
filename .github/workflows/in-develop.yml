@@ -46,7 +46,7 @@ jobs:
       - uses: actions/create-github-app-token@v3
         id: token
         with:
-          app-id: ${{ vars.RELEASER_APP_ID }}
+          client-id: ${{ vars.RELEASER_CLIENT_ID }}
           private-key: ${{ secrets.RELEASER_APP_PRIVATE_KEY }}
 
       - name: Label every issue this pull request closes
@@ -119,7 +119,7 @@ jobs:
       - uses: actions/create-github-app-token@v3
         id: token
         with:
-          app-id: ${{ vars.RELEASER_APP_ID }}
+          client-id: ${{ vars.RELEASER_CLIENT_ID }}
           private-key: ${{ secrets.RELEASER_APP_PRIVATE_KEY }}
 
       - name: Reopen every issue this pull request reverted

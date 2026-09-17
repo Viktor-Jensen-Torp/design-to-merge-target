@@ -3,7 +3,7 @@
 # Goes in the TARGET repo at .github/workflows/implement.yml.
 #
 # Requires, in the target repo:
-#   vars.IMPLEMENTER_APP_ID    the implementer GitHub App's numeric App ID
+#   vars.IMPLEMENTER_CLIENT_ID the implementer GitHub App's Client ID
 #   secrets.IMPLEMENTER_APP_PRIVATE_KEY   its private key, whole file
 #   secrets.OPENROUTER_API_KEY
 #   vars.IMPLEMENT_MODEL
@@ -45,7 +45,7 @@ jobs:
         id: token
         uses: actions/create-github-app-token@v3
         with:
-          app-id: ${{ vars.IMPLEMENTER_APP_ID }}
+          client-id: ${{ vars.IMPLEMENTER_CLIENT_ID }}
           private-key: ${{ secrets.IMPLEMENTER_APP_PRIVATE_KEY }}
 
       - uses: actions/checkout@v5
