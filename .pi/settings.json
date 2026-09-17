@@ -14,7 +14,7 @@
     "`retry.provider.timeoutMs` is set because it was not, and `settings.md` calls",
     "it the knob for a hung request. On 2026-09-16 two implementer turns died on",
     "`Upstream idle timeout exceeded` before any work began, truncated mid-word,",
-    "costing two round trips for nothing (`docs/run-audit-issue-48.md` I1). 300s",
+    "costing two round trips for nothing. 300s",
     "is above our slowest observed good turn and well under the job timeout, so a",
     "stall now fails fast enough for the driver's retry budget to mean something.",
     "",

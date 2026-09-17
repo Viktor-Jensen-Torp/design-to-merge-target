@@ -63,7 +63,7 @@ function implementationTool(pi: ExtensionAPI) {
 			"submit_implementation refuses if the working tree is dirty or the branch has no new commit; fix that and call it again.",
 			// The role file has said "do not read your files back" since the
 			// morning of 2026-09-17 and the implementer did it anyway, twice
-			// (`docs/run-audit-issue-71.md` I2). Saying it here puts it beside
+			// on three consecutive runs. Saying it here puts it beside
 			// the tool the model is about to reach for, rather than in a long
 			// document it read once.
 			"When the gates pass, call submit_implementation immediately. Do not read back files you wrote, do not re-run a gate that already passed, and do not diff a file you never touched — the gates already checked all of it.",

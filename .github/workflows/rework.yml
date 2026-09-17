@@ -159,6 +159,13 @@ jobs:
             fi
           fi
 
+      # Guarded like everything after `Count the strike`: on the stop path
+      # there is no checkout, so `git config` here has no repository to write to
+      # and the step dies — turning a CORRECT third-strike escalation into a red
+      # run, with the `Escalate` step below guarded off so nothing explains it.
+      # Never fired, because no pull request has reached three consecutive
+      # strikes. Latent, like the `top_p` trap in `NOTES.md` 46.
+      #
       # The agent commits, so git needs an identity. Without one its first
       # `git commit` fails with "Author identity unknown", and on 2026-09-16 the
       # implementer recovered by inventing one — every commit on that branch is
@@ -170,6 +177,7 @@ jobs:
       # attributes the push to anyway, and it makes `git log` say which role
       # wrote a commit.
       - name: Give the agent the App's identity
+        if: steps.count.outputs.stop == 'false'
         env:
           GH_TOKEN: ${{ steps.token.outputs.token }}
           SLUG: ${{ steps.token.outputs.app-slug }}
@@ -191,7 +199,9 @@ jobs:
       # Same stack-specific block as implement.yml, and for the same reason:
       # an agent that cannot run the gates will try to install its way to them.
       - uses: pnpm/action-setup@v6
+        if: steps.count.outputs.stop == 'false'
       - run: pnpm install --frozen-lockfile
+        if: steps.count.outputs.stop == 'false'
 
       - name: Rework
         if: steps.count.outputs.stop == 'false'
@@ -229,9 +239,15 @@ jobs:
             || { echo "::error::no python3 for the driver"; exit 1; }
           echo "role instructions: $(wc -c < .agents/implementer.md) bytes"
 
+          # A prompt carries what the role file cannot know, and nothing else
+          # (`NOTES.md` 57). It used to open "following .agents/implementer.md",
+          # and naming a path is an instruction to go and get it — a wasted turn
+          # fetching a file already in the system prompt. The other three
+          # prompts were fixed on 2026-09-17; this one is the fourth workflow
+          # and was missed for the reason `NOTES.md` 39 gives: rework is the
+          # implementer in a second file.
           cat > "$RUNNER_TEMP/prompt.md" <<PROMPT
-          You are reworking pull request #$PR in $REPO, following
-          .agents/implementer.md.
+          Rework pull request #$PR in $REPO.
 
           ${{ steps.ctx.outputs.task }}
 

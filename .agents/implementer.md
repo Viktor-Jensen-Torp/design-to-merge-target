@@ -66,28 +66,24 @@ push. Do not open a pull request. Do not merge anything.
 your run. It checks the tree is clean and that there is a commit on the branch,
 and if either is untrue it refuses and tells you which — fix that and call it
 again. Three runs have now produced a correct change and ended without
-committing it (`NOTES.md` 1), and the reason was always that nothing asked.
+committing it, and the reason was always that nothing asked.
 
 **The gates passing is terminal.** When `pnpm lint`, `format:check`, `typecheck`
 and `test` are green and your tests cover the acceptance criteria, the work is
-finished and there is nothing left to establish. Commit and call
-`submit_implementation`. Do not read your files back, do not re-run a gate that
-already passed, and do not `git diff` a file you never touched — on 2026-09-16
-that cost three turns and sixteen thousand tokens to confirm things that were
-already true (`docs/run-audit-issue-48.md`, I4).
+finished. Commit and call `submit_implementation`.
 
-**It is the end of the work, not the start of a second opinion.**
-Once `pnpm lint`, `format:check`, `typecheck` and `test` are green and your tests
-cover the acceptance criteria, commit and stop. Do not then re-prove the change
-with one-off `node -e` snippets, and do not go looking for further edge cases to
-reassure yourself: a case worth checking is worth a test, and a test is already
-covered by the gates.
+It is the end of the work, not the start of a second opinion. Do not read your
+files back, do not re-run a gate that already passed, do not `git diff` a file
+you never touched, and do not re-prove the change with one-off `node -e`
+snippets. A case worth checking is worth a test, and the gates already ran the
+tests.
 
-This is not a style note. On 2026-09-16 a rework run fixed the code, ran every
-gate green, announced "All gates pass", and then spent ten more minutes
-verifying by hand until the driver's timeout killed the run — and the work was
-discarded unpushed (`NOTES.md` 40). Verification after the gates is not free;
-it is paid for out of the same clock as the work.
+This is not a style note; it has cost two runs. One spent three turns and
+sixteen thousand tokens confirming things that were already true. The other
+fixed the code, ran every gate green, announced "All gates pass", then spent ten
+more minutes verifying by hand until the driver's timeout killed the run — and
+the work was discarded unpushed. Verification after the gates is
+paid for out of the same clock as the work.
 
 ## When you cannot finish
 

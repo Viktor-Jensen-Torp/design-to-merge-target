@@ -21,12 +21,27 @@ harness reads (`docs/adr/0008`).
 
 | file | what it does |
 |---|---|
-| `settings.json` | retry, timeouts, the built-in tool set, telemetry off |
+| `settings.json` | retry, timeouts, the built-in tool set, and telemetry **on** |
 | `models.json` | sampling and provider routing, per model |
 | `extensions/submit.ts` | the terminating tool each role finishes with |
 | `extensions/protect.ts` | refuses writes to the root of trust, in-loop |
 | `extensions/sanity.ts` | refuses a tool call whose arguments have stopped making sense |
 | `extensions/debug.ts` | records provider traffic. **Off unless `PI_DEBUG_PROVIDER` is set** |
+
+## `settings.json`, and the one line that must not change
+
+    "enableInstallTelemetry": true
+
+**Leave it true.** It does not only control the anonymous install ping: it also
+gates Pi's OpenRouter attribution headers (`HTTP-Referer: https://pi.dev`,
+`X-OpenRouter-Title: pi`). OpenRouter gates some `:free` models to recognised
+agentic harnesses and identifies them by exactly those headers, so turning it
+off makes those models answer **403** and every run on one die in three seconds.
+
+That is not hypothetical — it is how this project spent four hours and six wrong
+theories (`NOTES.md` 47). `settings.json` carries the same warning in a comment
+key beside the value; this table said "telemetry off" until 2026-09-17, which is
+the setting, described backwards, in the file whose job is to document it.
 
 ## `extensions/submit.ts`
 
