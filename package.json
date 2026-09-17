@@ -10,7 +10,8 @@
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "typecheck": "next typegen && tsc --noEmit",
-    "test": "vitest"
+    "test": "vitest --run",
+    "test:watch": "vitest"
   },
   "dependencies": {
     "next": "16.3.5",

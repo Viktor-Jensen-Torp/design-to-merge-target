@@ -89,7 +89,11 @@ jobs:
           node-version: 22
           cache: pnpm
       - run: pnpm install --frozen-lockfile
-      - run: pnpm test --run
+      # Just `pnpm test` — the script is `vitest --run`, so passing `--run` here
+      # too produces `vitest --run --run`, and vitest refuses a repeated flag:
+      # `Expected a single value for option "--run", received [true, true]`.
+      # The belt was not free.
+      - run: pnpm test
 
 
 # `e2e` and `mutation` are deliberately ABSENT, not stubbed.
