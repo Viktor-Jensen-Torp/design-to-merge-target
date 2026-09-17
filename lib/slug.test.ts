@@ -73,4 +73,24 @@ describe("slugify", () => {
   it("empty string returns empty string", () => {
     expect(slugify("")).toBe("");
   });
+
+  it("exotic dash: em dash", () => {
+    expect(slugify("Hello — World")).toBe("hello-world");
+  });
+
+  it("exotic dash: en dash", () => {
+    expect(slugify("Hello – World")).toBe("hello-world");
+  });
+
+  it("exotic dash: non-breaking hyphen", () => {
+    expect(slugify("non‑breaking")).toBe("non-breaking");
+  });
+
+  it("exotic dash: figure dash", () => {
+    expect(slugify("figure‒dash")).toBe("figure-dash");
+  });
+
+  it("exotic dash: mixed", () => {
+    expect(slugify("a—–‑‒b")).toBe("a-b");
+  });
 });
