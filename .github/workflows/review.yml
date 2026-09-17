@@ -608,6 +608,18 @@ jobs:
               if [ -n "$REMOVE" ]; then
                 gh pr edit "$PR" --repo "$REPO" --remove-label "$REMOVE"
               fi
+              # The implementer opens the pull request as a DRAFT, and GitHub
+              # refuses to enqueue a draft. The `unsure` and `rework` branches
+              # below already promote it; this one did not, because the
+              # gatekeeper used to run `gh pr ready` itself. That was removed on
+              # 2026-09-17 as a no-op, on the strength of a log line from a run
+              # where an `unsure` verdict had already promoted the pull request
+              # — so on the very next merge GitHub answered "Pull request is a
+              # draft" and the role escalated (`NOTES.md` 52).
+              #
+              # Promoting a pull request is not a judgement, so it belongs here
+              # rather than in a role file.
+              gh pr ready "$PR" --repo "$REPO"
               echo "reviewed=$AT" >> "$GITHUB_OUTPUT"
               echo "verdict=$V" >> "$GITHUB_OUTPUT"
               echo "go=true" >> "$GITHUB_OUTPUT" ;;
