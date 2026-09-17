@@ -26,11 +26,23 @@
     "than assumed \u2014 every endpoint behind inkling and nemotron supports both",
     "temperature and top_p, so the flag costs us no providers on those two.",
     "",
-    "`top_p` is NOT set for laguna, and that is not a style choice. laguna has",
     "exactly ONE endpoint, it does not support top_p, and sending it with",
     "require_parameters on would have left zero eligible providers \u2014 a guaranteed",
     "instant failure. It was latent only because the gatekeeper escalates on",
     "authority without calling a model.",
+    "",
+    "THE GATEKEEPER'S MODEL CHANGED ON 2026-09-17, from poolside/laguna-s-2.1:free",
+    "to google/gemma-4-26b-a4b-it:free. laguna had exactly ONE endpoint; when",
+    "Poolside rate-limited it the role was stuck for eight hours across three",
+    "attempts and `allow_fallbacks` had nowhere to fall back to (`NOTES.md` 48).",
+    "It also did not support `top_p`, which with require_parameters on would have",
+    "been zero eligible providers had the model ever been reached.",
+    "",
+    "gemma-4-26b has ELEVEN endpoints and no low-bit quantization at all",
+    "(bf16/fp8/unknown), so it needs no `quantizations` filter. `scripts/pick-model.py`",
+    "ranked gemma-4-31b higher on redundancy alone (14 endpoints) but that one can",
+    "be served at fp4; for the role that holds merge rights, avoiding an unproven",
+    "quality risk is worth three endpoints. Both were defensible.",
     "",
     "NOT SET YET, AND THE NEXT THING TO TRY: `quantizations`. The implementer's",
     "model can be served at int4 (Darkbloom) and the gatekeeper's single endpoint",
@@ -69,9 +81,10 @@
             }
           }
         },
-        "poolside/laguna-s-2.1:free": {
+        "google/gemma-4-26b-a4b-it:free": {
           "samplingParams": {
-            "temperature": 0.0
+            "temperature": 0.0,
+            "top_p": 1.0
           },
           "compat": {
             "openRouterRouting": {
