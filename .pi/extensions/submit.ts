@@ -33,6 +33,7 @@
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { StringEnum } from "@earendil-works/pi-ai";
 import { defineTool, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 
@@ -123,10 +124,17 @@ function reviewTool(pi: ExtensionAPI) {
 			"Put findings about a specific line in submit_review's comments array, anchored to path and line.",
 		],
 		parameters: Type.Object({
-			event: Type.Union(
-				[Type.Literal("APPROVE"), Type.Literal("REQUEST_CHANGES"), Type.Literal("COMMENT")],
-				{ description: "The verdict. APPROVE = merge, REQUEST_CHANGES = rework, COMMENT = unsure." },
-			),
+			// `StringEnum`, not `Type.Union([Type.Literal(…)])`. The union form
+			// emits `anyOf`/`const`; this emits `{type:"string", enum:[…]}`,
+			// which every provider accepts. Pi's own examples call the union
+			// form out as incompatible with Google, and while Pi's direct
+			// Google path does handle it via `parametersJsonSchema`, ours goes
+			// through OpenRouter as `openai-completions` and nothing promises
+			// the shape survives. The portable form costs nothing, so there is
+			// no trade to make.
+			event: StringEnum(["APPROVE", "REQUEST_CHANGES", "COMMENT"] as const, {
+				description: "The verdict. APPROVE = merge, REQUEST_CHANGES = rework, COMMENT = unsure.",
+			}),
 			body: Type.String({ description: "Findings grouped by pass, each tagged [Important] or [Nit]." }),
 			comments: Type.Optional(
 				Type.Array(

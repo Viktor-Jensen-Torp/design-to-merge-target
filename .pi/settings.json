@@ -11,6 +11,13 @@
     "was a no-op (`security.md`: a bare `.pi` directory is not a project resource).",
     "It now does something.",
     "",
+    "`retry.provider.timeoutMs` is set because it was not, and `settings.md` calls",
+    "it the knob for a hung request. On 2026-09-16 two implementer turns died on",
+    "`Upstream idle timeout exceeded` before any work began, truncated mid-word,",
+    "costing two round trips for nothing (`docs/run-audit-issue-48.md` I1). 300s",
+    "is above our slowest observed good turn and well under the job timeout, so a",
+    "stall now fails fast enough for the driver's retry budget to mean something.",
+    "",
     "DO NOT SET `enableInstallTelemetry` TO false. It does not only control the",
     "install ping. From `dist/core/provider-attribution.js`:",
     "",
@@ -40,7 +47,8 @@
     "baseDelayMs": 2000,
     "provider": {
       "maxRetries": 0,
-      "maxRetryDelayMs": 30000
+      "maxRetryDelayMs": 30000,
+      "timeoutMs": 300000
     }
   },
   "httpIdleTimeoutMs": 180000,

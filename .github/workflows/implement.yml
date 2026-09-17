@@ -130,6 +130,8 @@ jobs:
           # instruction to call it becomes an instruction to call nothing.
           test -s .pi/extensions/submit.ts \
             || { echo "::error::.pi/extensions/submit.ts missing — the role is told to call submit_implementation"; exit 1; }
+          test -s .pi/extensions/protect.ts \
+            || { echo "::error::.pi/extensions/protect.ts missing — the root of trust is unguarded in-loop"; exit 1; }
 
       # The agent is GIVEN the issue. It is not asked to find it.
       #
