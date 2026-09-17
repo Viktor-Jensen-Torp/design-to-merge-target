@@ -4,7 +4,7 @@
 # ADR 0011: `Done` means merged to `main`.
 #
 # It derives the list from the COMMIT RANGE, not by sweeping the `in:develop`
-# label. Sweeping would be wrong whenever `develop` has moved on since `staging`
+# label. Sweeping would be wrong whenever `develop` has moved on since the
 # was cut: those issues carry the label but are not in this release, and closing
 # them would report work as shipped that is still sitting in `develop`.
 #
@@ -12,8 +12,11 @@
 #
 #   develop <- agent pull request   SQUASH         one issue is one commit, so a
 #                                                  release can drop one (`0011`)
-#   staging <- develop              MERGE COMMIT   the squash subjects survive,
-#   main    <- staging              MERGE COMMIT   so `(#n)` is still readable
+#   main    <- develop              MERGE COMMIT   the squash subjects survive,
+#                                                  so `(#n)` is still readable
+#
+# `0014`: this used to promote through `staging`. The slow checks it was meant
+# to hold are not installed, so a hop through it changed no verification.
 #
 # A squashed release collapses every `(#n)` into the release's own number and
 # this workflow cannot work. It fails loudly rather than closing nothing.
@@ -33,7 +36,7 @@ jobs:
     env:
       GH_REPO: ${{ github.repository }}
     steps:
-      - uses: actions/create-github-app-token@v2
+      - uses: actions/create-github-app-token@v3
         id: token
         with:
           app-id: ${{ vars.RELEASER_APP_ID }}

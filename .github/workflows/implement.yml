@@ -43,7 +43,7 @@ jobs:
       # GITHUB_TOKEN-authored events also do not chain at all. NOTES.md 6.
       - name: Mint the implementer token
         id: token
-        uses: actions/create-github-app-token@v2
+        uses: actions/create-github-app-token@v3
         with:
           app-id: ${{ vars.IMPLEMENTER_APP_ID }}
           private-key: ${{ secrets.IMPLEMENTER_APP_PRIVATE_KEY }}
@@ -101,7 +101,11 @@ jobs:
           test -x .githooks/pre-commit
           test -x .githooks/pre-push
 
-      - uses: actions/setup-node@v4
+      # `v7`, not `v5`. `setup-node@v5` auto-caches whatever `packageManager`
+      # in `package.json` names, and this job has a full checkout and no pnpm —
+      # `pnpm store path` fails and `core.setFailed` takes the job with it.
+      # `v6` limited auto-caching to npm, which is why the jump skips a major.
+      - uses: actions/setup-node@v7
         with:
           node-version: 22
       - name: Install Pi
@@ -117,7 +121,7 @@ jobs:
       # dependencies", and the environment had made obeying it impossible
       # (`NOTES.md` section 23). An agent that cannot verify its own work will
       # do whatever it takes to be able to.
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@v6
       - run: pnpm install --frozen-lockfile
       - name: Assert the toolchain is actually there
         run: |
@@ -348,7 +352,7 @@ jobs:
       # The whole RPC event stream, for reading a failure without re-running it.
       - name: Keep the transcript
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: rpc-issue-${{ github.event.issue.number }}
           path: ${{ runner.temp }}/rpc.jsonl
