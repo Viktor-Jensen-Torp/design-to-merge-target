@@ -31,7 +31,6 @@
     "instant failure. It was latent only because the gatekeeper escalates on",
     "authority without calling a model.",
     "",
-    "THE GATEKEEPER'S MODEL CHANGED ON 2026-09-17, from poolside/laguna-s-2.1:free",
     "to google/gemma-4-26b-a4b-it:free. laguna had exactly ONE endpoint; when",
     "Poolside rate-limited it the role was stuck for eight hours across three",
     "attempts and `allow_fallbacks` had nowhere to fall back to (`NOTES.md` 48).",
@@ -43,6 +42,38 @@
     "ranked gemma-4-31b higher on redundancy alone (14 endpoints) but that one can",
     "be served at fp4; for the role that holds merge rights, avoiding an unproven",
     "quality risk is worth three endpoints. Both were defensible.",
+    "",
+    "endpoint and stayed rate-limited for eight hours; gemma-4-26b replaced it and",
+    "then hit Google's FREE-TIER INPUT CAP \u2014 16,000 tokens per request for",
+    "`generate_content_free_tier_input_token_count`, which a prompt plus a diff",
+    "plus a role file exceeds every time. A BYOK key routed us to Google directly,",
+    "which was the right fix for the shared pool and no fix at all for the cap.",
+    "",
+    "nemotron-3-super-120b is on Nvidia \u2014 the one provider we have same-day proof",
+    "is serving, because the implementer ran on it. Every free variant has exactly",
+    "one endpoint (`NOTES.md` 50), so provider choice is the only lever; picking",
+    "one that demonstrably works today beats picking an unknown one.",
+    "",
+    "ONE MODEL PER ROLE, ONE PROVIDER PER MODEL. Decided 2026-09-17.",
+    "",
+    "  implement  nvidia/nemotron-3.5-lightning     Nvidia",
+    "  rework     nex-agi/nex-n2.5-pro              Nex AGI",
+    "  review     thinkingmachines/inkling          Thinking Machines",
+    "  gatekeep   cohere/north-mini-code            Cohere",
+    "",
+    "Two reasons, and the second is the better one. Every `:free` variant has",
+    "exactly one endpoint (`NOTES.md` 50), so a provider's quota is a single point",
+    "of failure for every role sharing it \u2014 four providers means one throttle stops",
+    "one role, not the chain. And we do not yet know how these models differ in",
+    "practice. Running four in fixed positions turns every run into a comparison,",
+    "which is the only way that knowledge arrives.",
+    "",
+    "Sampling follows the job rather than the model: writing code gets a little",
+    "spread (0.2/0.9), judging gets none (0.0/1.0).",
+    "",
+    "Two of these are unproven here. nemotron and inkling have both run clean;",
+    "north-mini-code and nex-n2.5-pro have not. That is the point of the exercise,",
+    "and the driver now reports enough to tell a bad model from a slow one.",
     "",
     "NOT SET YET, AND THE NEXT THING TO TRY: `quantizations`. The implementer's",
     "model can be served at int4 (Darkbloom) and the gatekeeper's single endpoint",
@@ -69,6 +100,18 @@
             }
           }
         },
+        "nex-agi/nex-n2.5-pro:free": {
+          "samplingParams": {
+            "temperature": 0.2,
+            "top_p": 0.9
+          },
+          "compat": {
+            "openRouterRouting": {
+              "allow_fallbacks": true,
+              "require_parameters": true
+            }
+          }
+        },
         "thinkingmachines/inkling:free": {
           "samplingParams": {
             "temperature": 0.1,
@@ -81,7 +124,7 @@
             }
           }
         },
-        "google/gemma-4-26b-a4b-it:free": {
+        "cohere/north-mini-code:free": {
           "samplingParams": {
             "temperature": 0.0,
             "top_p": 1.0
