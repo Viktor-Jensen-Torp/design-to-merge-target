@@ -74,6 +74,12 @@ written afterwards than to have been followed. Say so if you see it.
 - **`findings`** is every finding, one item each: its `severity` (`important`
   or `nit`), its `pass` (`bugs`, `security` or `compliance`), and its `text`.
   A finding about one line also carries `path` and `line`.
+- **Every `important` finding also carries an `example` and a `fix`.** The
+  example is a concrete case: the input, what happens now, and what should
+  happen. The fix says what to change, specifically enough to act on.
+  Rework acts on these; "the logic should be explicit" gives it nothing to do,
+  and on #96 it answered exactly that with a comment. The tool refuses an
+  important finding without both. A nit stays one line.
 - **`questions`** is what only a person can answer. Leave it out if there is
   nothing.
 - **`summary`** is optional: anything a reader needs that is not a finding,
@@ -111,6 +117,10 @@ The tool writes `commit_id` for you. **You do not state the head SHA anywhere**
 | `important` findings and no question | `REQUEST_CHANGES` | the implementer reworks it |
 | neither | `APPROVE` | the gatekeeper decides on merging |
 
+**A line comment a person has resolved is settled.** Your prompt lists any. Do
+not raise them again, and do not count them as unresolved, whatever the code
+still looks like: a person decided.
+
 So the one judgement that matters is severity, and it has to be honest.
 **`important`** is reserved for what would break behaviour, leak data, or breach
 a stated policy: what must change before this merges. Everything else is a
@@ -132,6 +142,14 @@ finding: the implementer treats findings as work, so a question filed that way
 becomes an instruction. **Any question stops the change for a person**, even
 beside important findings, because the answer may change what the right fix is.
 List your important findings as well; the person sees both.
+
+**A question must be something only a person can decide**: what the issue
+meant, whether something is in scope, or a trade-off between two acceptable
+answers. **Never ask whether your own findings should be fixed.** An important
+finding must change, so it is rework, not a question. A finding a rework round
+did not fix is still important: list it again, and the change goes back. The
+strike count hands it to a person after three rounds (`0009`), so you never need
+a question to do that.
 
 **A question for a person is a good outcome; a confident wrong answer is not.**
 It costs a human a few minutes. Approving something you did not understand

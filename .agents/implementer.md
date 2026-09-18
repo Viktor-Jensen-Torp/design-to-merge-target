@@ -43,8 +43,9 @@ conditional — a loosened gate is escalated to a human and the run is wasted.
 ## If you are reworking
 
 Sometimes you are not starting fresh: the pull request exists and something sent
-it back. The prompt names the task, and everything you need is in the context
-file it points at — the plan, the review thread, and any failing job log.
+it back. The prompt names the task and carries everything you need: the issue,
+the plan, the current review, earlier reviews, comments on specific lines, the
+thread, and any failing job log.
 
 Three things change:
 
