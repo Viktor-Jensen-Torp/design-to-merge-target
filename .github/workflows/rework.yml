@@ -337,6 +337,8 @@ jobs:
             || { echo "::error::.pi/extensions/protect.ts missing — the root of trust is unguarded in-loop"; exit 1; }
           test -s .pi/extensions/sanity.ts \
             || { echo "::error::.pi/extensions/sanity.ts missing — corrupted tool arguments would go unnoticed"; exit 1; }
+          test -s .pi/extensions/permission-gate.ts \
+            || { echo "::error::.pi/extensions/permission-gate.ts missing — dangerous shell commands would run unchecked"; exit 1; }
           test -s .pi/extensions/debug.ts \
             || { echo "::error::.pi/extensions/debug.ts missing"; exit 1; }
           python3 --version >/dev/null \
@@ -350,6 +352,12 @@ jobs:
           # prompts were fixed on 2026-09-17; this one is the fourth workflow
           # and was missed for the reason `NOTES.md` 39 gives: rework is the
           # implementer in a second file.
+          # The plan and needs-human paths are expanded by this heredoc, so the
+          # agent sees real absolute paths. Pi's file tools never expand a
+          # variable: on round 2 of #96 the agent wrote to `$RUNNER_TEMP/...`,
+          # got a folder of that literal name in the repository, and deleted
+          # the real temporary folder while cleaning it up (`NOTES.md` 81).
+          # No backticks inside the heredoc: it is unquoted, so they would run.
           cat > "$RUNNER_TEMP/prompt.md" <<PROMPT
           Rework pull request #$PR in $REPO.
 
@@ -357,6 +365,10 @@ jobs:
 
           Commit your work. Do not push; the workflow does that. If the plan in
           the pull request body is now wrong, say so in your final message.
+
+          Your plan file: $RUNNER_TEMP/plan.md
+          Your needs-human file: $RUNNER_TEMP/needs-human.md
+          Use these exact paths.
 
           Everything you need is below, in full: the issue, the pull request and
           its plan, the current review, earlier reviews, comments on specific

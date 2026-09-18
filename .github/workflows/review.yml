@@ -384,6 +384,8 @@ jobs:
             || { echo "::error::.pi/extensions/protect.ts missing — the root of trust is unguarded in-loop"; exit 1; }
           test -s .pi/extensions/sanity.ts \
             || { echo "::error::.pi/extensions/sanity.ts missing — corrupted tool arguments would go unnoticed"; exit 1; }
+          test -s .pi/extensions/permission-gate.ts \
+            || { echo "::error::.pi/extensions/permission-gate.ts missing — dangerous shell commands would run unchecked"; exit 1; }
           test -s .pi/extensions/debug.ts \
             || { echo "::error::.pi/extensions/debug.ts missing"; exit 1; }
           test -s AGENTS.md \
@@ -850,6 +852,12 @@ jobs:
             || { echo "::error::.agents/nudge-gatekeeper.md is missing or empty"; exit 1; }
           test -x scripts/pi-driver.py \
             || { echo "::error::scripts/pi-driver.py missing from the sparse checkout"; exit 1; }
+          # Extensions are auto-discovered, so a missing one is silent. This
+          # job checked none of them until 2026-09-18 (`NOTES.md` 81).
+          for f in protect.ts sanity.ts permission-gate.ts; do
+            test -s ".pi/extensions/$f" \
+              || { echo "::error::.pi/extensions/$f missing from the sparse checkout"; exit 1; }
+          done
           test -s AGENTS.md \
             || { echo "::error::AGENTS.md is not in the checkout — this role is told to read it"; exit 1; }
           echo "role instructions: $(wc -c < .agents/gatekeeper.md) bytes"
