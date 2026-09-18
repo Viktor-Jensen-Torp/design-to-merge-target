@@ -116,7 +116,8 @@ jobs:
           REFINE_MODEL: ${{ vars.REFINE_MODEL }}
         run: |
           for f in .agents/refiner.md .agents/nudge-refiner.md .pi/extensions/submit.ts \
-                   .pi/extensions/protect.ts .pi/extensions/sanity.ts .pi/extensions/debug.ts; do
+                   .pi/extensions/protect.ts .pi/extensions/sanity.ts .pi/extensions/debug.ts \
+                   .pi/extensions/permission-gate.ts; do
             test -s "$f" || { echo "::error::$f is missing or empty"; exit 1; }
           done
           test -x scripts/pi-driver.py || { echo "::error::scripts/pi-driver.py missing"; exit 1; }
