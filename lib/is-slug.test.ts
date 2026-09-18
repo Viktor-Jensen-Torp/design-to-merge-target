@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { isSlug } from "./is-slug";
 import { slugify } from "./slug";
+import { isSlug } from "./is-slug";
 
 describe("isSlug", () => {
   it("hello-world is a valid slug", () => {
@@ -61,5 +61,17 @@ describe("isSlug", () => {
       const s = slugify(title);
       expect(isSlug(s)).toBe(s !== "");
     }
+  });
+
+  it('isSlug("a".repeat(60)) is true', () => {
+    expect(isSlug("a".repeat(60))).toBe(true);
+  });
+
+  it('isSlug("a".repeat(61)) is false', () => {
+    expect(isSlug("a".repeat(61))).toBe(false);
+  });
+
+  it('isSlug("a".repeat(200)) is false', () => {
+    expect(isSlug("a".repeat(200))).toBe(false);
   });
 });

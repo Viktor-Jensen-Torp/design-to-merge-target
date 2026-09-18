@@ -1,4 +1,5 @@
 import { slugify } from "./slug";
+import { MAX_SLUG_LENGTH } from "./slug";
 
 export function uniqueSlug(title: string, taken: Iterable<string>): string {
   const base = slugify(title);
@@ -14,12 +15,38 @@ export function uniqueSlug(title: string, taken: Iterable<string>): string {
   }
 
   // Try appending -2, -3, ... until we find one not in taken
+  // that fits within MAX_SLUG_LENGTH
   let suffix = 2;
   while (true) {
-    const candidate = base + "-" + suffix;
-    if (!takenSet.has(candidate)) {
-      return candidate;
+    // Calculate how many characters we can use for the base
+    // we need: base.length + 1 (dash) + suffix.length <= MAX_SLUG_LENGTH
+    const maxBaseLength = MAX_SLUG_LENGTH - 1 - String(suffix).length;
+    if (maxBaseLength <= 0) {
+      // No room for any suffix within the cap
+      return "";
     }
+
+    // Truncate the base if needed to leave room for the suffix
+    const truncatedBase =
+      base.length > maxBaseLength ? base.substring(0, maxBaseLength) : base;
+
+    // Ensure the truncated base doesn't end with a trailing dash
+    const cleanBase = truncatedBase.endsWith("-")
+      ? truncatedBase.slice(0, -1)
+      : truncatedBase;
+
+    const candidate = cleanBase + "-" + suffix;
+    if (!takenSet.has(candidate)) {
+      // Verify the candidate is within the length cap
+      if (candidate.length <= MAX_SLUG_LENGTH) {
+        return candidate;
+      }
+    }
+
     suffix++;
+    // Safety valve: if we've tried too many suffixes, give up
+    if (suffix > MAX_SLUG_LENGTH) {
+      return "";
+    }
   }
 }
