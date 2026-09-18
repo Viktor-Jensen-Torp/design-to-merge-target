@@ -255,6 +255,9 @@ jobs:
       # the instructions, the conventions or the tooling that judge it.
       - uses: actions/checkout@v5
         with:
+          # Instructions and tools from develop (`0019`), not the default branch
+          # a workflow_run job would otherwise check out.
+          ref: develop
           sparse-checkout: |
             .agents
             .pi
@@ -789,6 +792,9 @@ jobs:
       - uses: actions/checkout@v5
         if: steps.verdict.outputs.go == 'true'
         with:
+          # Instructions and tools from develop (`0019`), not the default branch
+          # a workflow_run job would otherwise check out.
+          ref: develop
           sparse-checkout: |
             .agents
             .pi

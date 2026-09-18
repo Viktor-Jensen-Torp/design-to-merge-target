@@ -31,6 +31,8 @@ jobs:
     steps:
       - uses: actions/checkout@v5
         with:
+          # The script from develop, like every role's tools (`0019`).
+          ref: develop
           sparse-checkout: scripts/refinement.py
           sparse-checkout-cone-mode: false
           persist-credentials: false
