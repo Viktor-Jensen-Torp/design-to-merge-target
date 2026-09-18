@@ -2,6 +2,14 @@
   "_comment": [
     "Goes in the TARGET repo at .pi/models.json.",
     "",
+    "PI NEVER READS IT THERE. Pi loads models.json only from its agent directory,",
+    "~/.pi/agent (or $PI_CODING_AGENT_DIR), never from a project's .pi/ (`models.md`",
+    "line 3; every models.json path in Pi's code). So a workflow must copy it into",
+    "~/.pi/agent before running Pi, or none of this file applies. Until 2026-09-18",
+    "no workflow did, so no role's sampling or routing ever reached the wire.",
+    "`refine.yml` now copies it and asserts the model is known. The other four",
+    "roles do not yet (`NOTES.md` 72).",
+    "",
     "WHY THIS FILE EXISTS. Until 2026-09-16 the pipeline sent no sampling",
     "parameters at all. Pi only sends them when something defines them, and",
     "OpenRouter does not substitute a default \u2014 it omits the parameter upstream",
@@ -57,10 +65,10 @@
     "ONE MODEL PER ROLE, ONE PROVIDER PER MODEL. Decided 2026-09-17.",
     "",
     "  implement  nvidia/nemotron-3.5-lightning     Nvidia",
-    "  rework     nex-agi/nex-n2.5-pro              Nex AGI",
+    "  rework     nvidia/nemotron-3.5-lightning     Nvidia    (the implementer's)",
     "  review     thinkingmachines/inkling          Thinking Machines",
     "  gatekeep   cohere/north-mini-code            Cohere",
-    "  refine     deepseek/deepseek-v4-flash-0731   OpenInference",
+    "  refine     nex-agi/nex-n2.5-pro              Nex AGI",
     "",
     "Two reasons, and the second is the better one. Every `:free` variant has",
     "exactly one endpoint (`NOTES.md` 50), so a provider's quota is a single point",
@@ -76,10 +84,26 @@
     "north-mini-code and nex-n2.5-pro have not. That is the point of the exercise,",
     "and the driver now reports enough to tell a bad model from a slow one.",
     "",
-    "The refiner's model was chosen 2026-09-18 with `scripts/pick-model.py`, from the",
-    "five providers not already in use: 1M context for a role that reads a batch of",
-    "issues, fp8, not a preview. It has not run here. Google's gemma was excluded by",
-    "hand: its free-tier input cap (`NOTES.md` 48) is not something the script checks.",
+    "Rework runs the implementer's model, from 2026-09-18. It is not a role: it is",
+    "the implementer, with the same role file, picking up its own pull request",
+    "(`CONTEXT.md`). A different model meant instructions tuned on one model were",
+    "followed by another. The cost is that both now share Nvidia's free quota.",
+    "",
+    "The refiner then took nex-n2.5-pro, the provider rework gave up. Tried before it",
+    "that day: deepseek-v4-flash looped on both runs, even with its settings applied,",
+    "and qwen3.8-27b was rate-limited on every request and never answered once",
+    "(`NOTES.md` 73). deepseek stays the fallback.",
+    "",
+    "TWO MODELS PI DOES NOT KNOW, DECLARED UNDER `models`. deepseek-v4-flash and",
+    "nex-n2.5-pro are not in Pi 0.85.1's OpenRouter catalogue. For an unknown id Pi",
+    "builds a COPY OF `moonshotai/kimi-k2.6` with the id swapped, and",
+    "`modelOverrides` never reach it: they are applied by id to catalogue models",
+    "only (`model-resolver.js` buildFallbackModel, `provider-composer.js`",
+    "getModels). So the refiner, and rework before it, ran with none of the",
+    "sampling or routing below. `NOTES.md` 72. Declaring a model under `models`",
+    "upserts it into the catalogue, and its override then applies. The limits are",
+    "OpenRouter's own (`context_length`, `top_provider.max_completion_tokens`), read",
+    "2026-09-18, in the same shape Pi's built-in entries use.",
     "",
     "NOT SET YET, AND THE NEXT THING TO TRY: `quantizations`. The implementer's",
     "model can be served at int4 (Darkbloom) and the gatekeeper's single endpoint",
@@ -93,6 +117,19 @@
   ],
   "providers": {
     "openrouter": {
+      "models": [
+        {
+          "id": "nex-agi/nex-n2.5-pro:free",
+          "name": "nex-agi/nex-n2.5-pro:free",
+          "reasoning": true,
+          "input": [
+            "text",
+            "image"
+          ],
+          "contextWindow": 262144,
+          "maxTokens": 235929
+        }
+      ],
       "modelOverrides": {
         "nvidia/nemotron-3.5-lightning:free": {
           "samplingParams": {
@@ -108,8 +145,8 @@
         },
         "nex-agi/nex-n2.5-pro:free": {
           "samplingParams": {
-            "temperature": 0.2,
-            "top_p": 0.9
+            "temperature": 0.0,
+            "top_p": 1.0
           },
           "compat": {
             "openRouterRouting": {
@@ -131,18 +168,6 @@
           }
         },
         "cohere/north-mini-code:free": {
-          "samplingParams": {
-            "temperature": 0.0,
-            "top_p": 1.0
-          },
-          "compat": {
-            "openRouterRouting": {
-              "allow_fallbacks": true,
-              "require_parameters": true
-            }
-          }
-        },
-        "deepseek/deepseek-v4-flash-0731:free": {
           "samplingParams": {
             "temperature": 0.0,
             "top_p": 1.0
