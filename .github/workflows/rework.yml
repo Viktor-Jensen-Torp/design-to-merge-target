@@ -22,8 +22,8 @@ name: Rework
 # secrets. It is accepted here because the job is limited to pull requests from
 # this repository (no forks), where our own agents are the only authors. That is
 # the same exposure implement.yml has always had. The code still comes from the
-# pull request; the instructions, scripts and Pi config come from the default
-# branch (see "Take the role and tools from the default branch").
+# pull request; the instructions, scripts and Pi config come from develop
+# (`0019`; see "Take the role and tools from develop").
 on:
   pull_request_target:
     types: [labeled]
@@ -121,14 +121,14 @@ jobs:
           token: ${{ steps.token.outputs.token }}
 
       # The role file, the driver and Pi's config (extensions, settings, models)
-      # come from the DEFAULT branch, never from the pull request, as they do in
-      # review.yml. A pull request cut before a fix would otherwise run without
+      # come from `develop`, never from the pull request (`0019`: every role
+      # reads its instructions from one place, develop, for now). A pull request cut before a fix would otherwise run without
       # it (round 3 of #96). They go outside the workspace, so they never dirty
       # the tree the agent must leave clean, and the agent is never told where.
-      - name: Take the role and tools from the default branch
+      - name: Take the role and tools from develop
         if: steps.count.outputs.stop == 'false'
         env:
-          DEFAULT: ${{ github.event.repository.default_branch }}
+          DEFAULT: develop
         run: |
           set -euo pipefail
           TRUSTED="$HOME/pipeline-trusted"
@@ -333,7 +333,7 @@ jobs:
           command -v rg > /dev/null && command -v fdfind > /dev/null \
             || { echo "::error::ripgrep or fd is missing, so Pi's grep and find tools would fail"; exit 1; }
           mkdir -p ~/.pi/agent
-          # From the default branch (see above). settings.json too: the job
+          # From develop (see above). settings.json too: the job
           # passes --no-approve, so the pull request's project settings are
           # never read, and these apply as Pi's global settings instead.
           cp "$TRUSTED/.pi/models.json" ~/.pi/agent/models.json
@@ -369,12 +369,12 @@ jobs:
           # Refuse to run an agent with no role instructions. `--skill` used to
           # fail silently here and two runs went out with none (`NOTES.md` 25).
           # Everything the agent runs under was checked when it was fetched
-          # from the default branch; this is only the last look before Pi starts.
+          # from develop; this is only the last look before Pi starts.
           test -s "$TRUSTED/.agents/implementer.md" \
             || { echo "::error::the trusted role file is missing"; exit 1; }
           python3 --version >/dev/null \
             || { echo "::error::no python3 for the driver"; exit 1; }
-          echo "role instructions: $(wc -c < "$TRUSTED/.agents/implementer.md") bytes, from the default branch"
+          echo "role instructions: $(wc -c < "$TRUSTED/.agents/implementer.md") bytes, from develop"
 
           # A prompt carries what the role file cannot know, and nothing else
           # (`NOTES.md` 57). It used to open "following .agents/implementer.md",
