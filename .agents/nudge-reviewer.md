@@ -12,8 +12,8 @@ state of the pull request measured after you stopped, and it does not yet
 satisfy the definition of done in your role instructions. Read them again,
 submit the verdict, and then stop.
 
-If you genuinely cannot tell, that is a real answer and a cheap one — your role
-instructions say which event carries it. Silence is not an answer: it is the one
+If you genuinely cannot tell, that is a real answer and a cheap one — put it in
+`questions`, and it goes to a person. Silence is not an answer: it is the one
 outcome the pipeline cannot act on.
 
 You have a limited number of these. When they run out the run is recorded as a

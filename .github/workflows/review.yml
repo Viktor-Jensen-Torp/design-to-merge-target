@@ -737,8 +737,22 @@ jobs:
               # (`NOTES.md` 51). An escalation is a state,
               # not an event log.
               MARK="<!-- escalation:reviewer-unsure -->"
+              # A COMMENT review is the reviewer asking a person something
+              # (`0018`): quote its questions here, so the person arrives at
+              # them rather than hunting through the review.
+              QUESTIONS=$(printf '%s' "${RJ:-}" | jq -r '.body // empty' 2>/dev/null \
+                            | awk '/^## Questions for a person/{f=1; next} /^## /{f=0} f && NF')
+              if [ -n "$QUESTIONS" ]; then
+                WHY="The reviewer has questions only a person can answer, so this has stopped here until one does (ADR 0018):
+
+          $QUESTIONS"
+              else
+                WHY="The reviewer was unsure, or submitted no review at all. A human should look (ADR 0006)."
+              fi
               BODY="$MARK
-          The reviewer was unsure, or submitted no review at all. A human should look (ADR 0006).
+          $WHY
+
+          To continue, answer on this pull request, then either swap \`needs:human\` for \`needs:rework\` so the implementer carries on with your answer in the thread, or handle it yourself.
 
           Last checked: $(date -u +%Y-%m-%dT%H:%M:%SZ), run $GITHUB_RUN_ID."
               EXISTING=$(gh api "repos/$REPO/issues/$PR/comments" \
