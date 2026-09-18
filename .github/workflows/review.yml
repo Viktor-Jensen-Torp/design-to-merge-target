@@ -82,46 +82,11 @@ jobs:
             *) echo "stop=false" >> "$GITHUB_OUTPUT" ;;
           esac
 
-      # A merge-group CI run that FAILED means the queue ejected this pull
-      # request: it passed alone but not against the entries ahead of it. That
-      # is the semantic conflict ADR 0010 adopted the queue to catch, and it is
-      # the fourth door into the rework loop (ADR 0009).
-      #
-      # The head SHA of a merge group belongs to a temporary branch, so the
-      # normal lookup below finds nothing. The pull request number has to come
-      # out of the branch name instead.
-      #
-      # VERIFIED 2026-09-15 (`NOTES.md` 16, Q5). GitHub documents only the
-      # prefix `gh-readonly-queue/{base}`; the observed name is
-      # `gh-readonly-queue/develop/pr-2-<base_sha>`, so the `pr-<n>` parse below
-      # is correct. It is still guarded: if the format ever changes, this step
-      # warns and does nothing, which is a silent door.
-      - name: Ejected from the merge queue
-        id: ejected
-        # Same reasoning as the step above, and the same bug it fixes: a
-        # merge-group run that is CANCELLED — the queue reordered, or the entry
-        # was removed — is not an ejection, and telling the implementer its
-        # change failed alongside the entries ahead of it would be false.
-        if: steps.cancelled.outputs.stop != 'true'
-          && startsWith(github.event.workflow_run.head_branch, 'gh-readonly-queue/')
-        env:
-          GH_TOKEN: ${{ steps.token.outputs.token }}
-          REPO: ${{ github.repository }}
-          BRANCH: ${{ github.event.workflow_run.head_branch }}
-          RUN: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.event.workflow_run.id }}
-        run: |
-          if [ "${{ github.event.workflow_run.conclusion }}" = "success" ]; then
-            echo "The queue is green; it will merge on its own."
-            exit 0
-          fi
-          NUM=$(sed -n 's/.*pr-\([0-9][0-9]*\).*/\1/p' <<< "$BRANCH")
-          if [ -z "$NUM" ]; then
-            echo "::warning::Could not read a pull request number out of '$BRANCH'."
-            echo "The merge-group branch format is not what this workflow assumes."
-            exit 0
-          fi
-          gh pr comment "$NUM" --repo "$REPO" --body "Ejected from the merge queue: this change passes on its own but not alongside the entries ahead of it. Back to the implementer (ADR 0010). $RUN"
-          gh pr edit "$NUM" --repo "$REPO" --add-label needs:rework
+      # A pull request dropped from the merge queue is handled by dequeued.yml,
+      # not here. This step used to watch for a FAILED merge-group CI run, but a
+      # textual clash with the entry ahead produces no CI run at all, so that
+      # case never reached the pipeline (#101, `NOTES.md` 80). It also sent any
+      # pull request back, not only an agent's, with the wrong task and a strike.
 
       # workflow_run's `pull_requests` payload is documented as NOT necessarily
       # indicating the PR that triggered the run, so it is not used here.

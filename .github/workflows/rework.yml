@@ -60,8 +60,13 @@ jobs:
 
           # Whose fault is it? A conflict is not the implementer getting it
           # wrong, so it spends the conflict budget, never a strike.
+          # A failed merge-queue build is the same kind of thing: someone
+          # else's work landed first (`0009`, the fourth door). dequeued.yml
+          # marks it with `queue:failed`, the only record that survives to here.
           if [ "$CONFLICTED" = "CONFLICTING" ]; then
             KIND=conflict; LIMIT=3; TASK=resolve-conflict
+          elif grep -qx "queue:failed" <<< "$LABELS"; then
+            KIND=conflict; LIMIT=3; TASK=queue-failed
           else
             KIND=strike;   LIMIT=3; TASK=unknown
           fi
@@ -77,8 +82,11 @@ jobs:
           echo "n=$N"       >> "$GITHUB_OUTPUT"
 
           if [ "$N" -ge "$LIMIT" ]; then
+            # `queue:failed` goes with it: it only means "this round's task".
+            DROP=needs:rework
+            grep -qx "queue:failed" <<< "$LABELS" && DROP="$DROP,queue:failed"
             gh pr edit "$PR" --repo "$REPO" \
-              --add-label needs:human --remove-label needs:rework
+              --add-label needs:human --remove-label "$DROP"
             gh pr ready "$PR" --repo "$REPO"
             gh pr comment "$PR" --repo "$REPO" --body \
               "Third consecutive $KIND. A human owns this now (ADR 0009)."
@@ -198,6 +206,23 @@ jobs:
           if [ "$TASK" = "resolve-conflict" ]; then
             git fetch origin develop
             echo "task=Rebase this branch onto origin/develop and resolve the conflicts." \
+              >> "$GITHUB_OUTPUT"
+          elif [ "$TASK" = "queue-failed" ]; then
+            # The merge queue built this change on top of the work ahead of it
+            # and the build failed. The branch passes on its own, so the log to
+            # read is the queue's (`gh-readonly-queue/<base>/pr-<n>-<sha>`).
+            git fetch origin develop
+            QRUN=$(gh run list --repo "$REPO" --workflow CI --event merge_group --limit 30 \
+                     --json headBranch,conclusion,databaseId \
+                   | jq -r --arg pr "$PR" '[.[] | select(.headBranch | test("/pr-" + $pr + "-"))
+                                           | select(.conclusion == "failure")] | first | .databaseId // empty')
+            echo "===== THE MERGE QUEUE'S FAILING BUILD =====" >> "$RUNNER_TEMP/context.md"
+            if [ -n "$QRUN" ]; then
+              gh run view "$QRUN" --repo "$REPO" --log-failed >> "$RUNNER_TEMP/context.md" 2>/dev/null || true
+            else
+              echo "(The failing queue build could not be found.)" >> "$RUNNER_TEMP/context.md"
+            fi
+            echo "task=The merge queue built this change on top of work that merged ahead of it, and that build failed; the branch passes on its own. Rebase onto origin/develop and make it work together. The queue's failing log is in the context." \
               >> "$GITHUB_OUTPUT"
           else
             # Not a conflict, so it is CI or the reviewer. The run log says which.
@@ -440,7 +465,10 @@ jobs:
 
           # The label comes off only once the work is actually on the remote.
           # Removing it earlier would lose the pull request if this step failed.
-          gh pr edit "$PR" --repo "$REPO" --remove-label needs:rework
+          DROP=needs:rework
+          gh pr view "$PR" --repo "$REPO" --json labels -q '.labels[].name' | grep -qx "queue:failed" \
+            && DROP="$DROP,queue:failed"
+          gh pr edit "$PR" --repo "$REPO" --remove-label "$DROP"
           gh pr comment "$PR" --repo "$REPO" \
             --body "Reworked: ${{ steps.ctx.outputs.task }}
           Now at \`$LOCAL\`. CI and review will run again."
