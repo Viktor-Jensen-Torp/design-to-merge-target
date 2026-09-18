@@ -20,10 +20,6 @@ export function uniqueSlug(title: string, taken: Iterable<string>): string {
     // Calculate how many characters we can use for the base
     // we need: base.length + 1 (dash) + suffix.length <= MAX_SLUG_LENGTH
     const maxBaseLength = MAX_SLUG_LENGTH - 1 - String(suffix).length;
-    if (maxBaseLength <= 0) {
-      // No room for any suffix within the cap
-      return "";
-    }
 
     // Truncate the base if needed to leave room for the suffix
     const truncatedBase =

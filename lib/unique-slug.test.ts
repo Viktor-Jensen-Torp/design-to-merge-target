@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { uniqueSlug } from "./unique-slug";
+import { slugify } from "./slug";
 import { isSlug } from "./is-slug";
 
 describe("uniqueSlug", () => {
@@ -68,9 +69,7 @@ describe("uniqueSlug", () => {
   it("property test: includes base slug in taken to exercise collision path", () => {
     const titles = ["Hello World", "Room 101", "Just One Word"];
     for (const title of titles) {
-      const base = uniqueSlug(title, [
-        title.toLowerCase().replace(/[^a-z0-9]+/g, "-"),
-      ]);
+      const base = uniqueSlug(title, [slugify(title)]);
       expect(isSlug(base)).toBe(base !== "");
     }
   });
