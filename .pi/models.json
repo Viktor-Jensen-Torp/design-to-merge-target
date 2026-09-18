@@ -65,10 +65,10 @@
     "ONE MODEL PER ROLE, ONE PROVIDER PER MODEL. Decided 2026-09-17.",
     "",
     "  implement  nvidia/nemotron-3.5-lightning     Nvidia",
-    "  rework     nex-agi/nex-n2.5-pro              Nex AGI",
+    "  rework     nvidia/nemotron-3.5-lightning     Nvidia    (the implementer's)",
     "  review     thinkingmachines/inkling          Thinking Machines",
     "  gatekeep   cohere/north-mini-code            Cohere",
-    "  refine     qwen/qwen3.8-27b                  ModelRun",
+    "  refine     nex-agi/nex-n2.5-pro              Nex AGI",
     "",
     "Two reasons, and the second is the better one. Every `:free` variant has",
     "exactly one endpoint (`NOTES.md` 50), so a provider's quota is a single point",
@@ -84,13 +84,15 @@
     "north-mini-code and nex-n2.5-pro have not. That is the point of the exercise,",
     "and the driver now reports enough to tell a bad model from a slow one.",
     "",
-    "The refiner's model, chosen twice on 2026-09-18. deepseek-v4-flash (OpenInference)",
-    "looped on both of its runs: it re-read the same files, ignored its own tool",
-    "results, and never submitted, even with its settings applied (`NOTES.md` 71, 73).",
-    "Its replacement is qwen3.8-27b on ModelRun, a provider no role uses yet. The one",
-    "risk is that ModelRun serves it at fp4, NOTES 38's unproven suspect. Gemma was",
-    "excluded for Google's free-tier input cap (NOTES 48), and Novita's ling variants",
-    "because by their names they are vision-, health- and finance-tuned.",
+    "Rework runs the implementer's model, from 2026-09-18. It is not a role: it is",
+    "the implementer, with the same role file, picking up its own pull request",
+    "(`CONTEXT.md`). A different model meant instructions tuned on one model were",
+    "followed by another. The cost is that both now share Nvidia's free quota.",
+    "",
+    "The refiner then took nex-n2.5-pro, the provider rework gave up. Tried before it",
+    "that day: deepseek-v4-flash looped on both runs, even with its settings applied,",
+    "and qwen3.8-27b was rate-limited on every request and never answered once",
+    "(`NOTES.md` 73). deepseek stays the fallback.",
     "",
     "TWO MODELS PI DOES NOT KNOW, DECLARED UNDER `models`. deepseek-v4-flash and",
     "nex-n2.5-pro are not in Pi 0.85.1's OpenRouter catalogue. For an unknown id Pi",
@@ -126,16 +128,6 @@
           ],
           "contextWindow": 262144,
           "maxTokens": 235929
-        },
-        {
-          "id": "qwen/qwen3.8-27b:free",
-          "name": "qwen/qwen3.8-27b:free",
-          "reasoning": true,
-          "input": [
-            "text"
-          ],
-          "contextWindow": 262144,
-          "maxTokens": 235929
         }
       ],
       "modelOverrides": {
@@ -153,8 +145,8 @@
         },
         "nex-agi/nex-n2.5-pro:free": {
           "samplingParams": {
-            "temperature": 0.2,
-            "top_p": 0.9
+            "temperature": 0.0,
+            "top_p": 1.0
           },
           "compat": {
             "openRouterRouting": {
@@ -176,18 +168,6 @@
           }
         },
         "cohere/north-mini-code:free": {
-          "samplingParams": {
-            "temperature": 0.0,
-            "top_p": 1.0
-          },
-          "compat": {
-            "openRouterRouting": {
-              "allow_fallbacks": true,
-              "require_parameters": true
-            }
-          }
-        },
-        "qwen/qwen3.8-27b:free": {
           "samplingParams": {
             "temperature": 0.0,
             "top_p": 1.0
