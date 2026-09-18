@@ -284,6 +284,9 @@ jobs:
           # --no-skills: the human skills in .agents/skills/ (`0015`) are for people's
           # harnesses. Pi discovers that directory by itself, and without the flag
           # every role would carry them in its system prompt on every run.
+          # --provider openrouter: `--model` reads `provider/id`, so a model whose
+          # prefix is also a Pi provider (`deepseek/`, `google/`, `openai/`) goes to
+          # that provider instead, and dies asking for its key (`NOTES.md` 70).
           python3 scripts/pi-driver.py \
             --prompt-file "$RUNNER_TEMP/prompt.md" \
             --nudge-file .agents/nudge-implementer.md \
@@ -292,7 +295,7 @@ jobs:
             --idle-timeout 600 \
             --timeout 2280 \
             --log "$RUNNER_TEMP/rpc.jsonl" \
-            -- pi --mode rpc --approve --no-skills \
+            -- pi --mode rpc --approve --no-skills --provider openrouter \
                   --append-system-prompt "$(cat .agents/implementer.md)" \
                   --model "${{ vars.REWORK_MODEL }}"
 
