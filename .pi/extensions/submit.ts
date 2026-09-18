@@ -106,6 +106,58 @@ function implementationTool(pi: ExtensionAPI) {
 	});
 }
 
+type Finding = {
+	severity: "important" | "nit";
+	pass: "bugs" | "security" | "compliance";
+	text: string;
+	path?: string;
+	line?: number;
+};
+
+/**
+ * The verdict follows from the findings; the reviewer does not choose it
+ * (`0018`). Any question stops the chain for a person, even beside an important
+ * finding. Otherwise an important finding sends the change back for rework, and
+ * otherwise it is approved.
+ *
+ * On 2026-09-18 a review listed two findings it tagged Important and submitted
+ * COMMENT, so the gatekeeper escalated to a person instead of sending it to
+ * rework (`NOTES.md` 77). Severity is now a required field on every finding, so
+ * an untagged finding cannot exist and the choice cannot be made wrongly.
+ * A question wins over an important finding. Sent to rework, the question
+ * could vanish from the next review and merge unanswered, or be "answered" in
+ * code by the implementer, and the answer may change what the right fix is.
+ * Decided with the owner, 2026-09-18.
+ */
+function verdictFor(findings: Finding[], questions: string[]): "APPROVE" | "REQUEST_CHANGES" | "COMMENT" {
+	if (questions.length > 0) return "COMMENT";
+	if (findings.some((f) => f.severity === "important")) return "REQUEST_CHANGES";
+	return "APPROVE";
+}
+
+/** The review body a person reads, grouped by pass. Built here, not written by the model. */
+function renderReview(summary: string | undefined, findings: Finding[], questions: string[]): string {
+	const titles = { bugs: "Bugs", security: "Security", compliance: "Compliance" } as const;
+	const out: string[] = [];
+	if (summary?.trim()) out.push(summary.trim(), "");
+	if (findings.length === 0) out.push("No findings.");
+	for (const pass of ["bugs", "security", "compliance"] as const) {
+		const here = findings.filter((f) => f.pass === pass);
+		if (here.length === 0) continue;
+		out.push(`## ${titles[pass]}`, "");
+		for (const f of here) {
+			const where = f.path ? ` (\`${f.path}${f.line ? `:${f.line}` : ""}\`)` : "";
+			out.push(`- [${f.severity === "important" ? "Important" : "Nit"}] ${f.text}${where}`);
+		}
+		out.push("");
+	}
+	if (questions.length > 0) {
+		out.push("## Questions for a person", "");
+		for (const q of questions) out.push(`- ${q}`);
+	}
+	return out.join("\n").trim();
+}
+
 /**
  * Replaces `scripts/post-review.py`. The reviewer used to write a JSON file by
  * hand and a Python script parsed it; here the same structure is a schema Pi
@@ -121,13 +173,14 @@ function reviewTool(pi: ExtensionAPI) {
 		name: "submit_review",
 		label: "Submit Review",
 		description:
-			"Submit the review. This is the only way to end your run. The event is the verdict: " +
-			"APPROVE to merge, REQUEST_CHANGES to send back, COMMENT when you cannot tell or need a question answered.",
-		promptSnippet: "Submit the verdict as a pull request review",
+			"Submit the review. This is the only way to end your run. You do not choose a verdict: " +
+			"any question stops the change for a person, otherwise any important finding sends it back for rework, " +
+			"otherwise it is approved.",
+		promptSnippet: "Submit your findings and questions as a pull request review",
 		promptGuidelines: [
 			"Use submit_review as your final action. It is the only thing that ends a review.",
-			"submit_review takes the verdict as its event: APPROVE, REQUEST_CHANGES, or COMMENT.",
-			"Put findings about a specific line in submit_review's comments array, anchored to path and line.",
+			"Give every finding a severity: important if it must change before this merges, nit otherwise. The verdict follows from these.",
+			"Put a finding about one line on that line with path and line. Put questions you cannot settle yourself in questions.",
 		],
 		parameters: Type.Object({
 			// `StringEnum`, not `Type.Union([Type.Literal(…)])`. The union form
@@ -138,23 +191,41 @@ function reviewTool(pi: ExtensionAPI) {
 			// through OpenRouter as `openai-completions` and nothing promises
 			// the shape survives. The portable form costs nothing, so there is
 			// no trade to make.
-			event: StringEnum(["APPROVE", "REQUEST_CHANGES", "COMMENT"] as const, {
-				description: "The verdict. APPROVE = merge, REQUEST_CHANGES = rework, COMMENT = unsure.",
-			}),
-			body: Type.String({ description: "Findings grouped by pass, each tagged [Important] or [Nit]." }),
-			comments: Type.Optional(
-				Type.Array(
-					Type.Object({
-						path: Type.String({ description: "File path as the diff shows it." }),
-						line: Type.Integer({ description: "Line number in the NEW version of the file." }),
-						body: Type.String(),
+			summary: Type.Optional(
+				Type.String({ description: "Anything a reader needs that is not a finding, such as a suspicion about the plan." }),
+			),
+			findings: Type.Array(
+				Type.Object({
+					severity: StringEnum(["important", "nit"] as const, {
+						description: "important: must change before this merges. nit: worth saying, does not block.",
 					}),
-					{ description: "Findings about one line each. Omit for findings that are not about a line." },
-				),
+					pass: StringEnum(["bugs", "security", "compliance"] as const),
+					text: Type.String({ description: "The finding: what is wrong, and what to change." }),
+					path: Type.Optional(Type.String({ description: "File path as the diff shows it, for a finding about a line." })),
+					line: Type.Optional(Type.Integer({ description: "Line number in the NEW version of the file." })),
+				}),
+				{ description: "Every finding, each with its severity. An empty list means nothing to report." },
+			),
+			questions: Type.Optional(
+				Type.Array(Type.String(), {
+					description: "Questions only a person can answer. Any question stops the change until a person answers.",
+				}),
 			),
 		}),
 
 		async execute(_id, params) {
+			const findings = params.findings as Finding[];
+			const questions = (params.questions ?? []).filter((q) => q.trim());
+			const event = verdictFor(findings, questions);
+			const body = renderReview(params.summary, findings, questions);
+			const inline = findings
+				.filter((f) => f.path && f.line)
+				.map((f) => ({
+					path: f.path as string,
+					line: f.line as number,
+					body: `[${f.severity === "important" ? "Important" : "Nit"}] ${f.text}`,
+				}));
+
 			const repo = process.env.PI_REPO;
 			const pr = process.env.PI_PR;
 			if (!repo || !pr) {
@@ -173,58 +244,34 @@ function reviewTool(pi: ExtensionAPI) {
 			const scratch = mkdtempSync(join(tmpdir(), "submit-review-"));
 			const payloadPath = join(scratch, "review.json");
 
-			const post = async (body: string, comments: typeof params.comments) => {
-				const payload: Record<string, unknown> = {
-					commit_id: head.out,
-					body,
-					event: params.event,
-				};
+			const post = async (text: string, comments: typeof inline | undefined) => {
+				const payload: Record<string, unknown> = { commit_id: head.out, body: text, event };
 				if (comments?.length) {
-					payload.comments = comments.map((c) => ({
-						path: c.path,
-						line: c.line,
-						side: "RIGHT",
-						body: c.body,
-					}));
+					payload.comments = comments.map((c) => ({ path: c.path, line: c.line, side: "RIGHT", body: c.body }));
 				}
 				writeFileSync(payloadPath, JSON.stringify(payload));
-				const r = await pi.exec("gh", [
-					"api",
-					`repos/${repo}/pulls/${pr}/reviews`,
-					"--method",
-					"POST",
-					"--input",
-					payloadPath,
-				]);
+				const r = await pi.exec("gh", ["api", `repos/${repo}/pulls/${pr}/reviews`, "--method", "POST", "--input", payloadPath]);
 				return { ok: (r.code ?? 0) === 0, out: `${r.stdout ?? ""}${r.stderr ?? ""}`.trim() };
 			};
 
-			let anchored = Boolean(params.comments?.length);
+			let anchored = inline.length > 0;
 			// Initialised rather than declared: Pi transpiles extensions without
 			// typechecking, so a definite-assignment mistake here would surface
 			// as a runtime error in production rather than a build failure.
 			let result: { ok: boolean; out: string } = { ok: false, out: "not attempted" };
 			try {
-				result = await post(params.body, params.comments);
-
+				result = await post(body, inline);
 				if (!result.ok && anchored) {
 					// Usually a line outside the diff: GitHub rejects the whole review
-					// if one anchor is unusable. Fold the findings into the body and
-					// post again — never lose the verdict over a nit's position.
-					//
-					// But this branch catches EVERY first-attempt failure, not only
-					// anchor ones. A 403 or a network fault would also land here and
-					// silently drop the inline comments. So say what happened: the
-					// reason goes into the body, where a reader can see that the
-					// anchors were lost and why, rather than disappearing.
+					// if one anchor is unusable. The body already lists every finding
+					// with its path and line, so post it alone and say why the inline
+					// comments are missing, rather than losing the verdict. This
+					// branch also catches a 403 or a network fault, so the reason is
+					// always shown.
 					const why = result.out.slice(0, 300) || "(GitHub gave no reason)";
-					const folded = (params.comments ?? [])
-						.map((c) => `- \`${c.path}:${c.line}\` — ${c.body}`)
-						.join("\n");
 					anchored = false;
 					result = await post(
-						`${params.body}\n\n## Findings that could not be anchored\n\n${folded}\n\n` +
-							`<sub>Inline comments were refused and folded in here. GitHub said: ${why}</sub>`,
+						`${body}\n\n<sub>Inline comments were refused, so the findings above carry their lines instead. GitHub said: ${why}</sub>`,
 						undefined,
 					);
 				}
@@ -236,11 +283,15 @@ function reviewTool(pi: ExtensionAPI) {
 				throw new Error(`GitHub refused the review: ${result.out}`);
 			}
 
+			const why = event === "COMMENT" ? "a question for a person" : event === "REQUEST_CHANGES" ? "an important finding" : "no question and no important finding";
 			return {
 				content: [
-					{ type: "text", text: `Submitted ${params.event} against ${head.out.slice(0, 7)}${anchored ? " with inline comments" : ""}.` },
+					{
+						type: "text",
+						text: `Submitted ${event} against ${head.out.slice(0, 7)}, because of ${why}${anchored ? ", with inline comments" : ""}.`,
+					},
 				],
-				details: { event: params.event, commit: head.out, anchored },
+				details: { event, commit: head.out, anchored },
 				terminate: true,
 			};
 		},
