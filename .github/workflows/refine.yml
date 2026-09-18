@@ -81,8 +81,33 @@ jobs:
       - uses: actions/setup-node@v7
         with:
           node-version: 22
-      - name: Install Pi
-        run: npm install -g @earendil-works/pi-coding-agent
+      # Pi, the two binaries its grep and find tools need, and models.json where
+      # Pi reads it. All asserted, because each fails silently otherwise.
+      #
+      # - ripgrep and fd are not on the Ubuntu runner (runner-images' Ubuntu
+      #   24.04 readme), and PI_OFFLINE=1 stops Pi downloading them
+      #   (tools-manager.js). Without them Pi's grep and find tools fail for
+      #   every role (`NOTES.md` 76). Ubuntu's fd is `fdfind`, which Pi looks for.
+      # - Pi reads models.json only from ~/.pi/agent, never from a project's
+      #   .pi/. Until 2026-09-18 no role's sampling or routing reached the wire
+      #   (`NOTES.md` 72). And a model missing from Pi's catalogue silently runs
+      #   as a copy of another model, with none of its settings.
+      - name: Install Pi, its search tools and its model config
+        env:
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          MODEL: ${{ vars.REFINE_MODEL }}
+        run: |
+          npm install -g @earendil-works/pi-coding-agent
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends ripgrep fd-find > /dev/null
+          command -v rg > /dev/null && command -v fdfind > /dev/null \
+            || { echo "::error::ripgrep or fd is missing, so Pi's grep and find tools would fail"; exit 1; }
+          mkdir -p ~/.pi/agent
+          cp .pi/models.json ~/.pi/agent/models.json
+          pi --list-models openrouter < /dev/null > "$RUNNER_TEMP/models.txt" 2>&1 || true
+          grep -qF -- "$MODEL" "$RUNNER_TEMP/models.txt" \
+            || { echo "::error::Pi does not know $MODEL. It would run as a copy of another model, with none of its settings (NOTES.md 72). Declare it under models in .pi/models.json."; exit 1; }
+          echo "Pi knows $MODEL; ripgrep and fd are installed"
 
       - name: Assert what the role needs is there
         env:
@@ -101,25 +126,6 @@ jobs:
           [[ "$PRIORITY_FIELD_ID" =~ ^[0-9]+$ ]] || { echo "::error::vars.PRIORITY_FIELD_ID is not a field id"; exit 1; }
           [[ "$EFFORT_FIELD_ID" =~ ^[0-9]+$ ]] || { echo "::error::vars.EFFORT_FIELD_ID is not a field id"; exit 1; }
           test -n "$REFINE_MODEL" || { echo "::error::vars.REFINE_MODEL is not set"; exit 1; }
-
-      # Pi reads models.json ONLY from its agent directory, ~/.pi/agent, never
-      # from a project's .pi/ (`models.md`, and every models.json path in Pi's
-      # code; `NOTES.md` 72). The copy deployed at .pi/models.json was never
-      # read, so no role's sampling or routing ever reached the wire. And a
-      # model missing from Pi's catalogue silently runs as a copy of another
-      # model, with no settings at all. Both are asserted here, before any model
-      # is called.
-      - name: Install the model config where Pi reads it
-        env:
-          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
-          REFINE_MODEL: ${{ vars.REFINE_MODEL }}
-        run: |
-          mkdir -p ~/.pi/agent
-          cp .pi/models.json ~/.pi/agent/models.json
-          pi --list-models openrouter < /dev/null > "$RUNNER_TEMP/models.txt" 2>&1 || true
-          grep -qF -- "$REFINE_MODEL" "$RUNNER_TEMP/models.txt" \
-            || { echo "::error::Pi does not know $REFINE_MODEL. It would run as a copy of another model, with none of its settings (NOTES.md 72). Declare it under models in .pi/models.json."; exit 1; }
-          echo "Pi knows $REFINE_MODEL, so its models.json settings apply"
 
       # The agent is GIVEN the batch. It is not asked to find it (`NOTES.md` 23).
       - name: Gather the batch
