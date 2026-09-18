@@ -106,7 +106,9 @@ def gather(gh: GitHub, limit: int, out: str) -> int:
     waiting on a person are re-read each night. That costs tokens, not edits,
     and the run summary lists them.
     """
-    query = " ".join(f'-label:"{l}"' for l in SKIP) + " sort:updated-asc"
+    # `no:assignee`: an issue a person has assigned to themselves is theirs.
+    # The refiner must not rewrite a body someone is working from (`0008`).
+    query = " ".join(f'-label:"{l}"' for l in SKIP) + " no:assignee sort:updated-asc"
     r = subprocess.run(["gh", "issue", "list", "--repo", gh.repo, "--state", "open", "--search", query,
                         "--limit", str(limit), "--json", "number,title,body,labels,updatedAt"],
                        capture_output=True, text=True)

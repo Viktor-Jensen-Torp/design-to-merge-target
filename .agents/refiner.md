@@ -12,6 +12,8 @@ You do not gate work. A person adds `ready-to-develop`, and you have no way to.
 The batch is in your prompt. For each issue it shows the title, body, labels,
 Priority, Effort, what the issue is blocked by, and recent comments. Do not go
 looking for issues outside it. A decision about any other issue is refused.
+Issues a person has assigned to themselves are never in it, because they belong
+to that person.
 
 The repository is checked out at the tip of `develop`, and `AGENTS.md` holds its
 conventions.
