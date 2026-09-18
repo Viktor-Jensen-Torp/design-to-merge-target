@@ -281,6 +281,9 @@ jobs:
           # committing, `pi` exited 0, and "Assert something changed" caught it
           # afterwards — which costs the whole run and escalates a pull request
           # that only needed another turn (`NOTES.md` 39).
+          # --no-skills: the human skills in .agents/skills/ (`0015`) are for people's
+          # harnesses. Pi discovers that directory by itself, and without the flag
+          # every role would carry them in its system prompt on every run.
           python3 scripts/pi-driver.py \
             --prompt-file "$RUNNER_TEMP/prompt.md" \
             --nudge-file .agents/nudge-implementer.md \
@@ -289,7 +292,7 @@ jobs:
             --idle-timeout 600 \
             --timeout 2280 \
             --log "$RUNNER_TEMP/rpc.jsonl" \
-            -- pi --mode rpc --approve \
+            -- pi --mode rpc --approve --no-skills \
                   --append-system-prompt "$(cat .agents/implementer.md)" \
                   --model "${{ vars.REWORK_MODEL }}"
 

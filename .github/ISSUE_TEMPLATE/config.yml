@@ -1,0 +1,5 @@
+# Goes in the TARGET repo at .github/ISSUE_TEMPLATE/config.yml.
+#
+# Steers people to the form. It changes the template chooser in the browser and
+# nothing else: maintainers still see a blank option, and the API is unaffected.
+blank_issues_enabled: false

@@ -30,7 +30,7 @@
  * serves every role and there is no second copy to disagree with the first.
  */
 
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { StringEnum } from "@earendil-works/pi-ai";
@@ -247,6 +247,159 @@ function reviewTool(pi: ExtensionAPI) {
 	});
 }
 
+/**
+ * The refiner decides and the workflow acts (`0016`).
+ *
+ * This tool writes no issue. It validates the refiner's decisions and records
+ * them in `PI_REPORT`. `refine.yml` applies them afterwards with a separate
+ * token that can write. The agent's own token is read-only, so "investigate
+ * read-only" is a property of the token, not an instruction the model is
+ * trusted to follow.
+ *
+ * Everything the refiner may do has a field here, and nothing else does. There
+ * is no label field, so `ready-to-develop` cannot be applied by construction.
+ * `PI_BATCH` holds the issue numbers the workflow gave it, and a decision about
+ * any other issue is refused. Gated issues are never in the batch.
+ */
+
+/**
+ * True when a body keeps a Problem section with something under it (`0015`).
+ * `shape.yml` applies the same rule to every issue. Change them together.
+ */
+function hasProblem(body: string): boolean {
+	const lines = body.split(/\r?\n/);
+	const at = lines.findIndex((l) => /^#{1,6}\s*problem\s*:?\s*$/i.test(l.trim()));
+	if (at < 0) return false;
+	for (const l of lines.slice(at + 1)) {
+		const t = l.trim();
+		if (/^#{1,6}\s/.test(t)) return false;
+		if (t && t !== "_No response_") return true;
+	}
+	return false;
+}
+
+function refinementTool() {
+	const Priority = StringEnum(["Urgent", "High", "Medium", "Low"] as const);
+	const Effort = StringEnum(["High", "Medium", "Low"] as const);
+	const Numbers = Type.Array(Type.Integer({ minimum: 1 }));
+
+	return defineTool({
+		name: "submit_refinement",
+		label: "Submit Refinement",
+		description:
+			"Record every decision from this run in one call. This is the only way to end your run. " +
+			"List only issues you are changing or proposing something for; list issues you judge ready in `ready`. " +
+			"An empty `issues` list is a correct answer when nothing needs refining.",
+		promptSnippet: "Record the refinement decisions and end the run",
+		promptGuidelines: [
+			"Use submit_refinement once, as your final action, with every decision from this run.",
+			"submit_refinement changes nothing itself. The workflow applies your decisions after you stop, so do not try to edit issues with gh.",
+			"If nothing needs refining, call submit_refinement with an empty issues list. That is a correct outcome, not a failure.",
+		],
+		parameters: Type.Object({
+			summary: Type.String({ description: "Two or three sentences on what this run found." }),
+			ready: Type.Array(Type.Integer({ minimum: 1 }), {
+				description: "Issues you judge ready for a person to gate with ready-to-develop.",
+			}),
+			issues: Type.Array(
+				Type.Object({
+					number: Type.Integer({ minimum: 1 }),
+					reason: Type.String({ description: "Why, in one or two sentences. Shown in the run summary." }),
+					title: Type.Optional(Type.String({ description: "The new title, in full." })),
+					body: Type.Optional(
+						Type.String({ description: "The new body, in full. It must keep the Problem section." }),
+					),
+					priority: Type.Optional(Priority),
+					effort: Type.Optional(Effort),
+					add_blocked_by: Type.Optional(Numbers),
+					remove_blocked_by: Type.Optional(Numbers),
+					duplicate_of: Type.Optional(
+						Type.Integer({ minimum: 1, description: "Close this issue as a duplicate of that one." }),
+					),
+					propose_split: Type.Optional(
+						Type.String({ description: "The split you propose, as a comment. A person decides." }),
+					),
+					propose_spike: Type.Optional(
+						Type.String({ description: "The question that needs running, and what would answer it." }),
+					),
+				}),
+			),
+		}),
+
+		async execute(_id, params) {
+			const reportPath = process.env.PI_REPORT;
+			const batchPath = process.env.PI_BATCH;
+			if (!reportPath || !batchPath) {
+				throw new Error("PI_REPORT and PI_BATCH are not set; the workflow must provide them.");
+			}
+			const batch = new Set<number>(JSON.parse(readFileSync(batchPath, "utf8")));
+
+			const problems: string[] = [];
+			const outside = (n: number) => !batch.has(n);
+
+			for (const n of params.ready) {
+				if (outside(n)) problems.push(`#${n} is in \`ready\` but was not in this run's batch.`);
+			}
+
+			const seen = new Set<number>();
+			for (const d of params.issues) {
+				const n = d.number;
+				const at = `#${n}`;
+				if (outside(n)) problems.push(`${at} was not in this run's batch. You may only decide about issues you were given.`);
+				if (seen.has(n)) problems.push(`${at} appears twice. Put every decision about one issue in one entry.`);
+				seen.add(n);
+
+				const changes = [
+					d.title, d.body, d.priority, d.effort, d.duplicate_of, d.propose_split, d.propose_spike,
+					d.add_blocked_by?.length ? d.add_blocked_by : undefined,
+					d.remove_blocked_by?.length ? d.remove_blocked_by : undefined,
+				].filter((v) => v !== undefined);
+				if (changes.length === 0) {
+					problems.push(`${at} changes nothing. List it in \`ready\` if it is ready, or leave it out.`);
+				}
+				if (d.title !== undefined && !d.title.trim()) problems.push(`${at}: an empty title.`);
+				if (d.body !== undefined && !hasProblem(d.body)) {
+					problems.push(`${at}: the new body has no Problem section with content under it. Keep the author's Problem section (\`0015\`).`);
+				}
+				if (d.duplicate_of !== undefined) {
+					if (d.duplicate_of === n) problems.push(`${at} cannot be a duplicate of itself.`);
+					if (changes.length > 1) problems.push(`${at}: an issue closed as a duplicate takes no other change.`);
+				}
+				for (const m of [...(d.add_blocked_by ?? []), ...(d.remove_blocked_by ?? [])]) {
+					if (m === n) problems.push(`${at} cannot be blocked by itself.`);
+				}
+				const both = (d.add_blocked_by ?? []).filter((m) => (d.remove_blocked_by ?? []).includes(m));
+				if (both.length) problems.push(`${at} both adds and removes blocked-by ${both.map((m) => `#${m}`).join(", ")}.`);
+				for (const [k, v] of [["propose_split", d.propose_split], ["propose_spike", d.propose_spike]] as const) {
+					if (v !== undefined && !v.trim()) problems.push(`${at}: ${k} is empty.`);
+				}
+				if (params.ready.includes(n) && (d.duplicate_of !== undefined || d.propose_split !== undefined || d.propose_spike !== undefined)) {
+					problems.push(`${at} cannot be ready and also be a duplicate, need a split, or need a spike.`);
+				}
+			}
+
+			if (problems.length) {
+				throw new Error(`Nothing was recorded. Fix these and call submit_refinement again:\n- ${problems.join("\n- ")}`);
+			}
+
+			writeFileSync(reportPath, JSON.stringify(params, null, 2));
+			const n = params.issues.length;
+			return {
+				content: [
+					{
+						type: "text",
+						text: n
+							? `Recorded decisions for ${n} issue(s) and ${params.ready.length} ready. The workflow applies them after you stop.`
+							: `Recorded: nothing to refine, ${params.ready.length} ready.`,
+					},
+				],
+				details: { issues: n, ready: params.ready.length },
+				terminate: true,
+			};
+		},
+	});
+}
+
 export default function (pi: ExtensionAPI) {
 	const role = (process.env.PI_ROLE ?? "").trim();
 
@@ -263,6 +416,10 @@ export default function (pi: ExtensionAPI) {
 			pi.registerTool(reviewTool(pi));
 			console.error('submit.ts: registered submit_review for role "reviewer"');
 			break;
+		case "refiner":
+			pi.registerTool(refinementTool());
+			console.error('submit.ts: registered submit_refinement for role "refiner"');
+			break;
 		case "gatekeeper":
 			// Deliberately none. The gatekeeper's finish is a merge or an
 			// escalation, both of which are `gh` calls the workflow can see
@@ -273,7 +430,7 @@ export default function (pi: ExtensionAPI) {
 		default:
 			console.error(
 				`submit.ts: PI_ROLE is "${role || "(unset)"}" — no submit tool registered. ` +
-					"Set PI_ROLE to implementer, rework or reviewer.",
+					"Set PI_ROLE to implementer, rework, reviewer or refiner.",
 			);
 	}
 }

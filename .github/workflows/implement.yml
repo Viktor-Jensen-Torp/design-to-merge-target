@@ -283,6 +283,9 @@ jobs:
           #
           # Everything the model says and every tool it calls is streamed to this
           # job's log as it happens.
+          # --no-skills: the human skills in .agents/skills/ (`0015`) are for people's
+          # harnesses. Pi discovers that directory by itself, and without the flag
+          # every role would carry them in its system prompt on every run.
           python3 scripts/pi-driver.py \
             --prompt-file "$RUNNER_TEMP/prompt.md" \
             --nudge-file .agents/nudge-implementer.md \
@@ -291,7 +294,7 @@ jobs:
             --idle-timeout 600 \
             --timeout 2280 \
             --log "$RUNNER_TEMP/rpc.jsonl" \
-            -- pi --mode rpc --approve \
+            -- pi --mode rpc --approve --no-skills \
                   --append-system-prompt "$(cat .agents/implementer.md)" \
                   --model "${{ vars.IMPLEMENT_MODEL }}"
 

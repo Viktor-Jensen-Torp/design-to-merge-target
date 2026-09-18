@@ -1,0 +1,8 @@
+---
+name: write-an-issue
+description: Write one GitHub issue for this repository in its issue contract (Problem, Acceptance criteria, Out of scope, Open questions, Context). Use when creating or rewriting a single issue, including each piece of a decomposition.
+---
+
+Read `.agents/skills/write-an-issue/SKILL.md` and follow it. That file is the only copy of
+this skill. This one exists so Claude Code can find it (`docs/adr/0015`), and
+it must never grow instructions of its own.

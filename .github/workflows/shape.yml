@@ -1,0 +1,55 @@
+# The shape check. Every issue has a Problem section, or it says so (`0015`).
+#
+# Goes in the TARGET repo at .github/workflows/shape.yml.
+#
+# Issue forms bind the browser and nothing else: an issue created with `gh` or
+# the API never meets the form (`NOTES.md` 67). So the one required section is
+# checked here, on every issue, however it was made. No model is called.
+#
+# Requires: scripts/refinement.py, and the label needs:shape.
+
+name: Shape
+
+on:
+  issues:
+    types: [opened, edited, reopened]
+
+# The latest edit is the one that matters. Cancelling an older run for the same
+# issue loses nothing, because the newer run reads the newer body.
+concurrency:
+  group: shape-${{ github.event.issue.number }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  shape:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          sparse-checkout: scripts/refinement.py
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+
+      # GITHUB_TOKEN is enough here, and deliberately so. A label it sets
+      # triggers no other workflow (`NOTES.md` 6), and nothing needs to chain
+      # from this one.
+      - name: Label the issue by its Problem section
+        env:
+          GH_TOKEN: ${{ github.token }}
+          N: ${{ github.event.issue.number }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          verdict=$(python3 scripts/refinement.py shape --event "$GITHUB_EVENT_PATH")
+          echo "issue #$N: $verdict needs:shape"
+          case "$verdict" in
+            add)    gh issue edit "$N" --repo "$REPO" --add-label needs:shape ;;
+            remove) gh issue edit "$N" --repo "$REPO" --remove-label needs:shape ;;
+            keep)   ;;
+            *)      echo "::error::unexpected verdict: $verdict"; exit 1 ;;
+          esac
