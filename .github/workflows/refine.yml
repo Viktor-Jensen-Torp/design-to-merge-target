@@ -1,0 +1,184 @@
+# The refiner. Every night it moves the un-gated backlog toward ready (`0016`).
+#
+# Goes in the TARGET repo at .github/workflows/refine.yml.
+#
+# Requires, in the target repo:
+#   vars.REFINER_CLIENT_ID          the refiner GitHub App's Client ID
+#   secrets.REFINER_APP_PRIVATE_KEY its private key, whole file
+#   secrets.OPENROUTER_API_KEY
+#   vars.REFINE_MODEL
+#   vars.PRIORITY_FIELD_ID          the org's Priority and Effort issue field ids
+#   vars.EFFORT_FIELD_ID            (VERIFY.md, standing up a target)
+#   vars.REFINE_BATCH               optional: issues read per run, default 10
+#   scripts/pi-driver.py, scripts/refinement.py
+#   .agents/refiner.md, .agents/nudge-refiner.md
+#   the labels needs:split and needs:spike
+
+name: Refine
+
+on:
+  schedule:
+    # 03:17 UTC. Scheduled runs are delayed, and can be DROPPED, under load,
+    # which is worst at the top of the hour (`NOTES.md` 67). A run that was
+    # dropped leaves no trace except its absence from the Actions history.
+    - cron: '17 3 * * *'
+  # How the role is tested without waiting for a night.
+  workflow_dispatch:
+
+# One refiner at a time: two runs over the same backlog would decide about the
+# same issues twice. A dispatch during a run waits, and a later one replaces it.
+# That loses nothing here, because both would read the same backlog.
+concurrency:
+  group: refine
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  refine:
+    runs-on: ubuntu-latest
+    # An App installation token expires after an hour (`NOTES.md` 9).
+    timeout-minutes: 40
+
+    steps:
+      # TWO TOKENS FROM ONE APP. The agent gets one that can read issues and
+      # nothing else, so "investigate read-only" (`0016`) is a property of the
+      # token, not an instruction the model is trusted to follow. Only
+      # `refinement.py apply`, after the agent has stopped, holds one that
+      # writes.
+      - name: Mint the agent's token, read-only
+        id: read
+        uses: actions/create-github-app-token@v3
+        with:
+          client-id: ${{ vars.REFINER_CLIENT_ID }}
+          private-key: ${{ secrets.REFINER_APP_PRIVATE_KEY }}
+          permission-issues: read
+
+      - name: Mint the apply token
+        id: write
+        uses: actions/create-github-app-token@v3
+        with:
+          client-id: ${{ vars.REFINER_CLIENT_ID }}
+          private-key: ${{ secrets.REFINER_APP_PRIVATE_KEY }}
+          permission-issues: write
+
+      # The code, so the refiner can answer an open question from it. Read-only,
+      # and no credentials are left in .git/config.
+      - uses: actions/checkout@v5
+        with:
+          ref: develop
+          persist-credentials: false
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+      - name: Install Pi
+        run: npm install -g @earendil-works/pi-coding-agent
+
+      - name: Assert what the role needs is there
+        env:
+          PRIORITY_FIELD_ID: ${{ vars.PRIORITY_FIELD_ID }}
+          EFFORT_FIELD_ID: ${{ vars.EFFORT_FIELD_ID }}
+          REFINE_MODEL: ${{ vars.REFINE_MODEL }}
+        run: |
+          for f in .agents/refiner.md .agents/nudge-refiner.md .pi/extensions/submit.ts \
+                   .pi/extensions/protect.ts .pi/extensions/sanity.ts .pi/extensions/debug.ts; do
+            test -s "$f" || { echo "::error::$f is missing or empty"; exit 1; }
+          done
+          test -x scripts/pi-driver.py || { echo "::error::scripts/pi-driver.py missing"; exit 1; }
+          test -f scripts/refinement.py || { echo "::error::scripts/refinement.py missing"; exit 1; }
+          # A decision about a field whose id is unset would fail at apply time,
+          # after the model had been paid for. Refuse now instead.
+          [[ "$PRIORITY_FIELD_ID" =~ ^[0-9]+$ ]] || { echo "::error::vars.PRIORITY_FIELD_ID is not a field id"; exit 1; }
+          [[ "$EFFORT_FIELD_ID" =~ ^[0-9]+$ ]] || { echo "::error::vars.EFFORT_FIELD_ID is not a field id"; exit 1; }
+          test -n "$REFINE_MODEL" || { echo "::error::vars.REFINE_MODEL is not set"; exit 1; }
+
+      # The agent is GIVEN the batch. It is not asked to find it (`NOTES.md` 23).
+      - name: Gather the batch
+        id: gather
+        env:
+          GH_TOKEN: ${{ steps.read.outputs.token }}
+          REPO: ${{ github.repository }}
+          LIMIT: ${{ vars.REFINE_BATCH || '10' }}
+        run: |
+          set -euo pipefail
+          python3 scripts/refinement.py gather --repo "$REPO" --limit "$LIMIT" --out "$RUNNER_TEMP"
+          n=$(python3 -c 'import json,sys; print(len(json.load(open(sys.argv[1]))))' "$RUNNER_TEMP/batch.json")
+          echo "count=$n" >> "$GITHUB_OUTPUT"
+          if [ "$n" = 0 ]; then
+            echo "## Refinement" >> "$GITHUB_STEP_SUMMARY"
+            echo "The backlog holds nothing to refine. No model was called." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Refine
+        if: steps.gather.outputs.count != '0'
+        env:
+          GH_TOKEN: ${{ steps.read.outputs.token }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          # Read by .pi/extensions/submit.ts: which tool to register, where it
+          # records the decisions, and which issues it may decide about.
+          PI_ROLE: refiner
+          PI_REPORT: ${{ runner.temp }}/refinement.json
+          PI_BATCH: ${{ runner.temp }}/batch.json
+          PI_OFFLINE: "1"
+          REPO: ${{ github.repository }}
+        run: |
+          {
+            printf 'Refine this batch of issues from %s.\n\n' "$REPO"
+            printf 'The batch is reproduced below IN FULL. Do not go looking for it.\n\n'
+            cat "$RUNNER_TEMP/backlog.md"
+          } > "$RUNNER_TEMP/prompt.md"
+          echo "batch: $(wc -c < "$RUNNER_TEMP/backlog.md") bytes"
+
+          # Finished means decisions are recorded, including "none". A quiet
+          # night is a correct outcome, but it still has to be said: an empty
+          # run and a dead run must not look the same.
+          cat > "$RUNNER_TEMP/done.sh" <<'DONE'
+          test -s "$PI_REPORT" && exit 0
+          echo "No decisions are recorded. Nothing from this run will be applied."
+          exit 1
+          DONE
+
+          # --tools is an allowlist (`PRD.md`): when Pi gains a tool, this role
+          # does not silently gain it. It needs no edit or write tool, and `bash`
+          # is there for `gh` and grep. The token is what stops it writing.
+          # --no-skills: the human skills in .agents/skills/ (`0015`) are for people's
+          # harnesses. Pi discovers that directory by itself, and without the flag
+          # every role would carry them in its system prompt on every run.
+          python3 scripts/pi-driver.py \
+            --prompt-file "$RUNNER_TEMP/prompt.md" \
+            --nudge-file .agents/nudge-refiner.md \
+            --done "bash $RUNNER_TEMP/done.sh" \
+            --max-nudges 2 \
+            --idle-timeout 600 \
+            --timeout 1800 \
+            --log "$RUNNER_TEMP/rpc.jsonl" \
+            -- pi --mode rpc --approve --no-skills \
+                  --append-system-prompt "$(cat .agents/refiner.md)" \
+                  --model "${{ vars.REFINE_MODEL }}" \
+                  --tools read,grep,find,ls,bash,submit_refinement
+
+      - name: Apply the decisions
+        if: steps.gather.outputs.count != '0'
+        env:
+          GH_TOKEN: ${{ steps.write.outputs.token }}
+          REPO: ${{ github.repository }}
+          PRIORITY_FIELD_ID: ${{ vars.PRIORITY_FIELD_ID }}
+          EFFORT_FIELD_ID: ${{ vars.EFFORT_FIELD_ID }}
+        run: |
+          python3 scripts/refinement.py apply --repo "$REPO" \
+            --report "$RUNNER_TEMP/refinement.json" \
+            --backlog "$RUNNER_TEMP/backlog.json"
+
+      - name: Keep the transcript and the decisions
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: refine-${{ github.run_id }}
+          path: |
+            ${{ runner.temp }}/rpc.jsonl
+            ${{ runner.temp }}/refinement.json
+            ${{ runner.temp }}/backlog.md
+          if-no-files-found: warn
+          retention-days: 7

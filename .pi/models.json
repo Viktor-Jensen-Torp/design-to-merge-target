@@ -60,6 +60,7 @@
     "  rework     nex-agi/nex-n2.5-pro              Nex AGI",
     "  review     thinkingmachines/inkling          Thinking Machines",
     "  gatekeep   cohere/north-mini-code            Cohere",
+    "  refine     deepseek/deepseek-v4-flash-0731   OpenInference",
     "",
     "Two reasons, and the second is the better one. Every `:free` variant has",
     "exactly one endpoint (`NOTES.md` 50), so a provider's quota is a single point",
@@ -74,6 +75,11 @@
     "Two of these are unproven here. nemotron and inkling have both run clean;",
     "north-mini-code and nex-n2.5-pro have not. That is the point of the exercise,",
     "and the driver now reports enough to tell a bad model from a slow one.",
+    "",
+    "The refiner's model was chosen 2026-09-18 with `scripts/pick-model.py`, from the",
+    "five providers not already in use: 1M context for a role that reads a batch of",
+    "issues, fp8, not a preview. It has not run here. Google's gemma was excluded by",
+    "hand: its free-tier input cap (`NOTES.md` 48) is not something the script checks.",
     "",
     "NOT SET YET, AND THE NEXT THING TO TRY: `quantizations`. The implementer's",
     "model can be served at int4 (Darkbloom) and the gatekeeper's single endpoint",
@@ -125,6 +131,18 @@
           }
         },
         "cohere/north-mini-code:free": {
+          "samplingParams": {
+            "temperature": 0.0,
+            "top_p": 1.0
+          },
+          "compat": {
+            "openRouterRouting": {
+              "allow_fallbacks": true,
+              "require_parameters": true
+            }
+          }
+        },
+        "deepseek/deepseek-v4-flash-0731:free": {
           "samplingParams": {
             "temperature": 0.0,
             "top_p": 1.0
