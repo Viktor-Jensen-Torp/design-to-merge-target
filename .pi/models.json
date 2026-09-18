@@ -68,7 +68,7 @@
     "  rework     nex-agi/nex-n2.5-pro              Nex AGI",
     "  review     thinkingmachines/inkling          Thinking Machines",
     "  gatekeep   cohere/north-mini-code            Cohere",
-    "  refine     deepseek/deepseek-v4-flash-0731   OpenInference",
+    "  refine     qwen/qwen3.8-27b                  ModelRun",
     "",
     "Two reasons, and the second is the better one. Every `:free` variant has",
     "exactly one endpoint (`NOTES.md` 50), so a provider's quota is a single point",
@@ -84,10 +84,13 @@
     "north-mini-code and nex-n2.5-pro have not. That is the point of the exercise,",
     "and the driver now reports enough to tell a bad model from a slow one.",
     "",
-    "The refiner's model was chosen 2026-09-18 with `scripts/pick-model.py`, from the",
-    "five providers not already in use: 1M context for a role that reads a batch of",
-    "issues, fp8, not a preview. It has not run here. Google's gemma was excluded by",
-    "hand: its free-tier input cap (`NOTES.md` 48) is not something the script checks.",
+    "The refiner's model, chosen twice on 2026-09-18. deepseek-v4-flash (OpenInference)",
+    "looped on both of its runs: it re-read the same files, ignored its own tool",
+    "results, and never submitted, even with its settings applied (`NOTES.md` 71, 73).",
+    "Its replacement is qwen3.8-27b on ModelRun, a provider no role uses yet. The one",
+    "risk is that ModelRun serves it at fp4, NOTES 38's unproven suspect. Gemma was",
+    "excluded for Google's free-tier input cap (NOTES 48), and Novita's ling variants",
+    "because by their names they are vision-, health- and finance-tuned.",
     "",
     "TWO MODELS PI DOES NOT KNOW, DECLARED UNDER `models`. deepseek-v4-flash and",
     "nex-n2.5-pro are not in Pi 0.85.1's OpenRouter catalogue. For an unknown id Pi",
@@ -114,22 +117,22 @@
     "openrouter": {
       "models": [
         {
-          "id": "deepseek/deepseek-v4-flash-0731:free",
-          "name": "deepseek/deepseek-v4-flash-0731:free",
-          "reasoning": true,
-          "input": [
-            "text"
-          ],
-          "contextWindow": 1048576,
-          "maxTokens": 393216
-        },
-        {
           "id": "nex-agi/nex-n2.5-pro:free",
           "name": "nex-agi/nex-n2.5-pro:free",
           "reasoning": true,
           "input": [
             "text",
             "image"
+          ],
+          "contextWindow": 262144,
+          "maxTokens": 235929
+        },
+        {
+          "id": "qwen/qwen3.8-27b:free",
+          "name": "qwen/qwen3.8-27b:free",
+          "reasoning": true,
+          "input": [
+            "text"
           ],
           "contextWindow": 262144,
           "maxTokens": 235929
@@ -184,7 +187,7 @@
             }
           }
         },
-        "deepseek/deepseek-v4-flash-0731:free": {
+        "qwen/qwen3.8-27b:free": {
           "samplingParams": {
             "temperature": 0.0,
             "top_p": 1.0
