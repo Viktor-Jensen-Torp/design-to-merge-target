@@ -222,12 +222,42 @@ def apply_one(gh: GitHub, d: dict, read_at: str | None) -> list[str]:
     return done
 
 
+def mark_ready(gh: GitHub, report: dict, read_at: dict, applied: set) -> list[str]:
+    """Keep the `refined` label in step with the refiner's judgement.
+
+    `refined` means the refiner judged the issue ready at its last read, so a
+    person can find those issues on the board without opening a run report.
+    It starts nothing: only `active:agent` does. Added to issues judged ready,
+    removed from batch issues judged not ready. An issue someone changed since
+    the batch was read is skipped, unless the change was this run's own edit.
+    """
+    notes = []
+    ready = set(report["ready"])
+    for n in sorted(read_at):
+        cur = gh.api(f"issues/{n}", read=True)
+        if cur is None:  # dry run
+            if n in ready:
+                gh.api(f"issues/{n}/labels", "POST", {"labels": ["refined"]})
+            continue
+        labels = {l["name"] for l in cur.get("labels", [])}
+        if cur["state"] != "open" or "active:agent" in labels or "active:human" in labels:
+            continue
+        if n not in applied and cur["updated_at"] != read_at[n]:
+            notes.append(f"#{n} changed since the batch was read; `refined` left as it was")
+            continue
+        if n in ready and "refined" not in labels:
+            gh.api(f"issues/{n}/labels", "POST", {"labels": ["refined"]})
+        elif n not in ready and "refined" in labels:
+            gh.api(f"issues/{n}/labels/refined", "DELETE")
+    return notes
+
+
 def apply(a) -> int:
     report = json.load(open(a.report))
     read_at = {i["number"]: i["updated_at"] for i in json.load(open(a.backlog))}
     gh = a.gh
 
-    rows, failed = [], 0
+    rows, failed, applied = [], 0, set()
     for d in report["issues"]:
         n = d["number"]
         if n not in read_at:
@@ -238,9 +268,16 @@ def apply(a) -> int:
             continue
         try:
             rows.append((n, d["reason"], "; ".join(apply_one(gh, d, read_at[n])) or "nothing"))
+            applied.add(n)
         except Failed as e:
             rows.append((n, d["reason"], f"**failed:** {e}"))
             failed += 1
+
+    try:
+        label_notes = mark_ready(gh, report, read_at, applied)
+    except Failed as e:
+        label_notes = [f"**`refined` labels failed:** {e}"]
+        failed += 1
 
     out = ["## Refinement", "", report["summary"], ""]
     if rows:
@@ -249,8 +286,9 @@ def apply(a) -> int:
     else:
         out.append("Nothing to refine. This run wrote nothing, which is a correct outcome.")
     if report["ready"]:
-        out += ["", "**Ready, waiting for a person to add `active:agent`:** "
+        out += ["", "**Ready, labelled `refined`, waiting for a person to add `active:agent`:** "
                 + ", ".join(f"#{n}" for n in report["ready"])]
+    out += [f"- {x}" for x in label_notes]
     text = "\n".join(out) + "\n"
     print(text)
     if os.environ.get("GITHUB_STEP_SUMMARY"):

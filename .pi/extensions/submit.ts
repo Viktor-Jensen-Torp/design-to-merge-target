@@ -423,7 +423,22 @@ export default function (pi: ExtensionAPI) {
 			break;
 		case "refiner":
 			pi.registerTool(refinementTool());
-			console.error('submit.ts: registered submit_refinement for role "refiner"');
+			// The refiner never needs a text-only turn: every turn is a read or
+			// the submit. On 2026-09-18 nex-n2.5-pro reached the right answer and
+			// wrote submit_refinement's arguments out as TEXT, three times
+			// identically at temperature 0, until the nudges ran out (`NOTES.md`
+			// 75). `tool_choice: "required"` makes a text answer impossible.
+			// The provider must support it: `require_parameters: true` routes
+			// only to providers honouring every parameter sent, so an
+			// unsupported one fails loudly rather than being ignored.
+			pi.on("before_provider_request", (event) => {
+				const payload = event.payload as Record<string, unknown>;
+				if (Array.isArray(payload?.tools) && payload.tools.length > 0) {
+					return { ...payload, tool_choice: "required" };
+				}
+				return undefined;
+			});
+			console.error('submit.ts: registered submit_refinement for role "refiner", with tool_choice "required"');
 			break;
 		case "gatekeeper":
 			// Deliberately none. The gatekeeper's finish is a merge or an
