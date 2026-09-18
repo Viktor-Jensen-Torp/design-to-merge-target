@@ -23,8 +23,12 @@
 
 name: Dequeued
 
+# `pull_request_target`, not `pull_request`: a `pull_request` workflow does not
+# run at all while the pull request has a merge conflict, and a clash is the
+# main thing this job exists for (`NOTES.md` 82). This job checks out nothing
+# and runs no code from the pull request; it only reads it through the API.
 on:
-  pull_request:
+  pull_request_target:
     types: [dequeued]
 
 concurrency:
@@ -39,6 +43,7 @@ jobs:
     # Agent pull requests only. A person's pull request stays with that person
     # (`0008`): they see the queue drop it and decide.
     if: contains(github.event.pull_request.labels.*.name, 'agent')
+      && github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:

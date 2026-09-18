@@ -11,8 +11,21 @@
 
 name: Rework
 
+# `pull_request_target`, not `pull_request` (`NOTES.md` 82). A `pull_request`
+# workflow runs the pull request's OWN copy of this file, and "will not run ...
+# if the pull request has a merge conflict" (events-that-trigger-workflows).
+# The first meant round 3 of #96 ran this afternoon's rework.yml, role file and
+# extensions, and deleted the temp folder a second time. The second meant a
+# conflicted pull request, the very case rework exists for, never reached it.
+# `pull_request_target` runs the DEFAULT BRANCH's copy and runs through
+# conflicts. GitHub warns it is risky when it runs a pull request's code with
+# secrets. It is accepted here because the job is limited to pull requests from
+# this repository (no forks), where our own agents are the only authors. That is
+# the same exposure implement.yml has always had. The code still comes from the
+# pull request; the instructions, scripts and Pi config come from the default
+# branch (see "Take the role and tools from the default branch").
 on:
-  pull_request:
+  pull_request_target:
     types: [labeled]
 
 # One rework at a time per pull request. Two concurrent runs would push over
@@ -31,7 +44,10 @@ permissions:
 
 jobs:
   rework:
+    # No forks: pull_request_target holds secrets, and a fork's code must never
+    # run with them.
     if: github.event.label.name == 'needs:rework'
+      && github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
     timeout-minutes: 45
 
@@ -103,6 +119,29 @@ jobs:
           ref: ${{ github.event.pull_request.head.ref }}
           fetch-depth: 0
           token: ${{ steps.token.outputs.token }}
+
+      # The role file, the driver and Pi's config (extensions, settings, models)
+      # come from the DEFAULT branch, never from the pull request, as they do in
+      # review.yml. A pull request cut before a fix would otherwise run without
+      # it (round 3 of #96). They go outside the workspace, so they never dirty
+      # the tree the agent must leave clean, and the agent is never told where.
+      - name: Take the role and tools from the default branch
+        if: steps.count.outputs.stop == 'false'
+        env:
+          DEFAULT: ${{ github.event.repository.default_branch }}
+        run: |
+          set -euo pipefail
+          TRUSTED="$HOME/pipeline-trusted"
+          mkdir -p "$TRUSTED"
+          git fetch -q --depth=1 origin "$DEFAULT"
+          git archive FETCH_HEAD .agents .pi scripts/pi-driver.py | tar -x -C "$TRUSTED"
+          for f in .agents/implementer.md .agents/nudge-implementer.md scripts/pi-driver.py \
+                   .pi/settings.json .pi/models.json .pi/extensions/submit.ts .pi/extensions/protect.ts \
+                   .pi/extensions/sanity.ts .pi/extensions/permission-gate.ts .pi/extensions/debug.ts; do
+            test -s "$TRUSTED/$f" || { echo "::error::$f missing from $DEFAULT"; exit 1; }
+          done
+          echo "TRUSTED=$TRUSTED" >> "$GITHUB_ENV"
+          echo "role and tools from $DEFAULT at $(git rev-parse --short FETCH_HEAD)"
 
       - name: Arm the local gates
         if: steps.count.outputs.stop == 'false'
@@ -294,7 +333,11 @@ jobs:
           command -v rg > /dev/null && command -v fdfind > /dev/null \
             || { echo "::error::ripgrep or fd is missing, so Pi's grep and find tools would fail"; exit 1; }
           mkdir -p ~/.pi/agent
-          cp .pi/models.json ~/.pi/agent/models.json
+          # From the default branch (see above). settings.json too: the job
+          # passes --no-approve, so the pull request's project settings are
+          # never read, and these apply as Pi's global settings instead.
+          cp "$TRUSTED/.pi/models.json" ~/.pi/agent/models.json
+          cp "$TRUSTED/.pi/settings.json" ~/.pi/agent/settings.json
           pi --list-models openrouter < /dev/null > "$RUNNER_TEMP/models.txt" 2>&1 || true
           grep -qF -- "$MODEL" "$RUNNER_TEMP/models.txt" \
             || { echo "::error::Pi does not know $MODEL. It would run as a copy of another model, with none of its settings (NOTES.md 72). Declare it under models in .pi/models.json."; exit 1; }
@@ -325,25 +368,13 @@ jobs:
           # second implementer with its own instructions to drift from the first.
           # Refuse to run an agent with no role instructions. `--skill` used to
           # fail silently here and two runs went out with none (`NOTES.md` 25).
-          test -s .agents/implementer.md \
-            || { echo "::error::.agents/implementer.md is missing or empty"; exit 1; }
-          test -s .agents/nudge-implementer.md \
-            || { echo "::error::.agents/nudge-implementer.md is missing or empty"; exit 1; }
-          test -x scripts/pi-driver.py \
-            || { echo "::error::scripts/pi-driver.py is missing"; exit 1; }
-          test -s .pi/extensions/submit.ts \
-            || { echo "::error::.pi/extensions/submit.ts missing — the role is told to call submit_implementation"; exit 1; }
-          test -s .pi/extensions/protect.ts \
-            || { echo "::error::.pi/extensions/protect.ts missing — the root of trust is unguarded in-loop"; exit 1; }
-          test -s .pi/extensions/sanity.ts \
-            || { echo "::error::.pi/extensions/sanity.ts missing — corrupted tool arguments would go unnoticed"; exit 1; }
-          test -s .pi/extensions/permission-gate.ts \
-            || { echo "::error::.pi/extensions/permission-gate.ts missing — dangerous shell commands would run unchecked"; exit 1; }
-          test -s .pi/extensions/debug.ts \
-            || { echo "::error::.pi/extensions/debug.ts missing"; exit 1; }
+          # Everything the agent runs under was checked when it was fetched
+          # from the default branch; this is only the last look before Pi starts.
+          test -s "$TRUSTED/.agents/implementer.md" \
+            || { echo "::error::the trusted role file is missing"; exit 1; }
           python3 --version >/dev/null \
             || { echo "::error::no python3 for the driver"; exit 1; }
-          echo "role instructions: $(wc -c < .agents/implementer.md) bytes"
+          echo "role instructions: $(wc -c < "$TRUSTED/.agents/implementer.md") bytes, from the default branch"
 
           # A prompt carries what the role file cannot know, and nothing else
           # (`NOTES.md` 57). It used to open "following .agents/implementer.md",
@@ -408,16 +439,19 @@ jobs:
           # --provider openrouter: `--model` reads `provider/id`, so a model whose
           # prefix is also a Pi provider (`deepseek/`, `google/`, `openai/`) goes to
           # that provider instead, and dies asking for its key (`NOTES.md` 70).
-          python3 scripts/pi-driver.py \
+          python3 "$TRUSTED/scripts/pi-driver.py" \
             --prompt-file "$RUNNER_TEMP/prompt.md" \
-            --nudge-file .agents/nudge-implementer.md \
+            --nudge-file "$TRUSTED/.agents/nudge-implementer.md" \
             --done "bash $RUNNER_TEMP/done.sh" \
             --max-nudges 2 \
             --idle-timeout 600 \
             --timeout 2280 \
             --log "$RUNNER_TEMP/rpc.jsonl" \
-            -- pi --mode rpc --approve --no-skills --provider openrouter \
-                  --append-system-prompt "$(cat .agents/implementer.md)" \
+            -- pi --mode rpc --no-approve --no-extensions --no-skills --provider openrouter \
+                  -e "$TRUSTED/.pi/extensions/submit.ts" -e "$TRUSTED/.pi/extensions/protect.ts" \
+                  -e "$TRUSTED/.pi/extensions/sanity.ts" -e "$TRUSTED/.pi/extensions/permission-gate.ts" \
+                  -e "$TRUSTED/.pi/extensions/debug.ts" \
+                  --append-system-prompt "$(cat "$TRUSTED/.agents/implementer.md")" \
                   --model "${{ vars.REWORK_MODEL }}"
 
       # "Assert something changed" used to live here, running the same check
