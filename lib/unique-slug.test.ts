@@ -56,19 +56,13 @@ describe("uniqueSlug", () => {
     expect(result).toBe("a".repeat(58) + "-2");
   });
 
-  it("returns empty string when no valid unique candidate fits within the cap", () => {
+  it("returns a valid slug within MAX_SLUG_LENGTH when base is taken", () => {
     const base = "a".repeat(60);
-    // Include the base itself in taken, and fill with candidates that truncate base + suffix
     const taken: Set<string> = new Set();
     taken.add(base); // base is taken
-    // Add candidates that would be generated, each truncated to fit within MAX_SLUG_LENGTH
-    for (let i = 2; i <= 62; i++) {
-      const maxBaseLen = 60 - 1 - String(i).length;
-      if (maxBaseLen <= 0) break;
-      taken.add(base.substring(0, maxBaseLen) + "-" + i);
-    }
     const result = uniqueSlug(base, taken);
-    expect(result).toBe("");
+    expect(isSlug(result)).toBe(true);
+    expect(result.length).toBe(60);
   });
 
   it("property test: includes base slug in taken to exercise collision path", () => {

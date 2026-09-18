@@ -1,5 +1,4 @@
-import { slugify } from "./slug";
-import { MAX_SLUG_LENGTH } from "./slug";
+import { slugify, MAX_SLUG_LENGTH } from "./slug";
 
 export function uniqueSlug(title: string, taken: Iterable<string>): string {
   const base = slugify(title);
@@ -30,20 +29,11 @@ export function uniqueSlug(title: string, taken: Iterable<string>): string {
     const truncatedBase =
       base.length > maxBaseLength ? base.substring(0, maxBaseLength) : base;
 
-    // Ensure the truncated base doesn't end with a trailing dash
-    const cleanBase = truncatedBase.endsWith("-")
-      ? truncatedBase.slice(0, -1)
-      : truncatedBase;
-
-    const candidate = cleanBase + "-" + suffix;
+    const candidate = truncatedBase + "-" + suffix;
     if (!takenSet.has(candidate)) {
       return candidate;
     }
 
     suffix++;
-    // Safety valve: exit after trying enough suffixes; also prevents premature exit for valid candidates like `a-61`
-    if (suffix > MAX_SLUG_LENGTH + 2) {
-      return "";
-    }
   }
 }
