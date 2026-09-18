@@ -1,0 +1,8 @@
+---
+description: Turn a design (.pen) or document change in this repository into a set of GitHub issues, with a person steering every step. Use when a design or docs change needs to become work for the pipeline.
+alwaysApply: false
+---
+
+Read `.agents/skills/decompose/SKILL.md` and follow it. That file is the only copy of
+this skill. This rule exists so Cursor can find it (`docs/adr/0015`), and it
+must never grow instructions of its own.

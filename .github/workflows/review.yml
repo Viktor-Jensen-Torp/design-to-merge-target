@@ -429,6 +429,9 @@ jobs:
           # the pull request silently unreviewed. The gatekeeper would then read
           # an absent verdict as `unsure` and escalate — the right outcome by
           # accident, arrived at without anyone knowing the review never ran.
+          # --no-skills: the human skills in .agents/skills/ (`0015`) are for people's
+          # harnesses. Pi discovers that directory by itself, and without the flag
+          # every role would carry them in its system prompt on every run.
           python3 scripts/pi-driver.py \
             --prompt-file "$RUNNER_TEMP/prompt.md" \
             --nudge-file .agents/nudge-reviewer.md \
@@ -437,7 +440,7 @@ jobs:
             --idle-timeout 600 \
             --timeout 1500 \
             --log "$RUNNER_TEMP/rpc.jsonl" \
-            -- pi --mode rpc --approve \
+            -- pi --mode rpc --approve --no-skills \
                   --append-system-prompt "$(cat .agents/reviewer.md)" \
                   --model "${{ vars.REVIEW_MODEL }}" \
                   --tools read,grep,find,ls,bash,submit_review
@@ -835,6 +838,9 @@ jobs:
           #
           # The predicate is the SAME script the safety net runs, so "finished"
           # means one thing in this job, not two.
+          # --no-skills: the human skills in .agents/skills/ (`0015`) are for people's
+          # harnesses. Pi discovers that directory by itself, and without the flag
+          # every role would carry them in its system prompt on every run.
           python3 scripts/pi-driver.py \
             --prompt-file "$RUNNER_TEMP/prompt.md" \
             --nudge-file .agents/nudge-gatekeeper.md \
@@ -843,7 +849,7 @@ jobs:
             --idle-timeout 300 \
             --timeout 900 \
             --log "$RUNNER_TEMP/rpc.jsonl" \
-            -- pi --mode rpc --approve \
+            -- pi --mode rpc --approve --no-skills \
                   --append-system-prompt "$(cat .agents/gatekeeper.md)" \
                   --model "${{ vars.GATEKEEP_MODEL }}" \
                   --tools read,grep,find,ls,bash

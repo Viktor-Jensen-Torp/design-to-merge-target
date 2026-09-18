@@ -1,0 +1,43 @@
+# The issue contract, as a form for people writing in the browser (`0015`).
+#
+# Goes in the TARGET repo at .github/ISSUE_TEMPLATE/issue.yml.
+#
+# A form binds the browser and nothing else: `gh issue create` and the API never
+# meet it (`NOTES.md` 67). `shape.yml` checks the one required section on every
+# issue however it was made. Each field below renders as a `### <label>` heading,
+# which is exactly what that check and the refiner read, so do not rename a
+# label without changing `scripts/refinement.py` and `.pi/extensions/submit.ts`.
+#
+# Priority and Effort are not here. They are issue fields, set during
+# refinement, and a number written in two places is drift.
+
+name: Issue
+description: One piece of work, small enough to review as one pull request.
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What is wrong or missing, and for whom. The only required section.
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance criteria
+      description: What done means, written so it can be tested. It can wait for refinement.
+  - type: textarea
+    id: out-of-scope
+    attributes:
+      label: Out of scope
+      description: What this issue deliberately does not do.
+  - type: textarea
+    id: questions
+    attributes:
+      label: Open questions
+      description: What is not yet known. Refinement starts here.
+  - type: textarea
+    id: context
+    attributes:
+      label: Context
+      description: Links, designs, prior discussion.

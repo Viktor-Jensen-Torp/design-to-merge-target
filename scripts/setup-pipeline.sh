@@ -434,7 +434,7 @@ printf '\n'
 if (( missing == 0 )); then
   say "All twelve present. The pipeline can run."
   printf '\n'
-  step "Write one small issue by hand, then label it ready-to-develop."
+  step "Write one small issue by hand, then label it active:agent."
   step "Watch for: branch agent/issue-<n>, a pull request with a plan in its body,"
   step "CI green, a VERDICT comment, then a merge through the queue."
 else

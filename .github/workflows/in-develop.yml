@@ -193,21 +193,21 @@ jobs:
           for N in $ISSUES; do
             gh issue reopen "$N" 2>/dev/null || true
 
-            # `needs:human`, NOT `ready-to-develop`. ADR 0011 says the issue
+            # `needs:human`, NOT `active:agent`. ADR 0011 says the issue
             # reopens; it does not say it goes straight back to an agent, and
             # sending it back unchanged would produce the same work that was
             # just rejected. A revert is a human's decision, so the next move is
             # a human's too — they re-label when the issue has been re-scoped.
             STALE=$(gh issue view "$N" --json labels \
                       -q '[.labels[].name
-                           | select(. == "in:develop" or . == "ready-to-develop")]
+                           | select(. == "in:develop" or . == "active:agent")]
                           | join(",")')
             if [ -n "$STALE" ]; then
               gh issue edit "$N" --remove-label "$STALE"
             fi
             gh issue edit "$N" --add-label needs:human
             gh issue comment "$N" --body \
-              "Reverted on \`develop\` by $RUN. The work is no longer in the branch and this issue is open again. Re-scope it and re-label \`ready-to-develop\` when it is ready to be attempted; the objection should be on the reverting pull request."
+              "Reverted on \`develop\` by $RUN. The work is no longer in the branch and this issue is open again. Re-scope it and re-label \`active:agent\` when it is ready to be attempted; the objection should be on the reverting pull request."
             echo "issue #$N -> reopened, needs:human"
           done
 
