@@ -121,16 +121,70 @@ jobs:
           # findings section, it had nothing to act on, and the run was wasted
           # and escalated (`NOTES.md` 39). Both are read: the reviews carry the
           # findings, the comments carry everything a human or another job said.
+          #
+          # Four more things, from reading what the first rework round on #96 was
+          # given (`NOTES.md` 79):
+          #   - the ISSUE, because its acceptance criteria are what the work is
+          #     judged on, and rework had only the plan;
+          #   - which review is CURRENT: every round's findings used to arrive
+          #     in one undifferentiated pile;
+          #   - comments on specific LINES (`pulls/<n>/comments`), which neither
+          #     call above returns, including a person's reply on a line;
+          #   - and all of it goes into the prompt itself (the Rework step), not
+          #     a file the agent is told to read (`NOTES.md` 57).
+          # Sections are divided by ===== lines, not markdown headings: the issue,
+          # the plan and the reviews carry their own `## ` headings, and a
+          # divider at the same level makes the structure ambiguous.
+          #
+          # Line comments come from GraphQL `reviewThreads`, the only API that
+          # says whether a thread is RESOLVED. A thread a person resolved is
+          # settled: rework must not act on it (`NOTES.md` 79). Only a person's
+          # resolution counts, and `resolvedBy` is typed `User` in the schema, so
+          # it is never a bot: resolved with a user named means a person did it.
+          # The branch is agent/issue-<n>; the body's "Closes #n" is the fallback.
+          ISSUE=$(sed -n 's|^agent/issue-\([0-9][0-9]*\)$|\1|p' <<< "${{ github.event.pull_request.head.ref }}")
+          if [ -z "$ISSUE" ]; then
+            ISSUE=$(gh pr view "$PR" --repo "$REPO" --json body -q .body \
+                      | grep -o -i -E 'closes #[0-9]+' | head -1 | tr -dc '0-9')
+          fi
+          REVIEWS=$(gh api "repos/$REPO/pulls/$PR/reviews" --paginate \
+                      --jq '[.[] | select(.state != "PENDING")]' | jq -s 'add // []')
+          THREADS=$(gh api graphql \
+                      -f query='query($o:String!,$r:String!,$n:Int!){repository(owner:$o,name:$r){pullRequest(number:$n){reviewThreads(first:100){nodes{isResolved resolvedBy{login} path line originalLine comments(first:50){nodes{author{login} body}}}}}}}' \
+                      -f o="${REPO%/*}" -f r="${REPO#*/}" -F n="$PR" \
+                      --jq '.data.repository.pullRequest.reviewThreads.nodes')
+          # One jq definition of "settled", used for both lists below.
+          SETTLED='(.isResolved and .resolvedBy != null)'
+          THREAD='"— on `" + .path + ":" + ((.line // .originalLine) | tostring) + "`:\n" + ([.comments.nodes[] | "  " + .author.login + ": " + .body] | join("\n")) + "\n"'
           {
-            echo "## The pull request"
+            echo "===== THE ISSUE ====="
+            if [ -n "$ISSUE" ]; then
+              gh issue view "$ISSUE" --repo "$REPO" --json number,title,body \
+                -q '"#" + (.number|tostring) + ": " + .title + "\n\n" + .body'
+            else
+              echo "(No linked issue was found. Work from the plan below.)"
+            fi
+            echo
+            echo "===== THE PULL REQUEST, WITH ITS PLAN ====="
             gh pr view "$PR" --repo "$REPO" --json title,body -q '.title + "\n\n" + .body'
             echo
-            echo "## The reviews"
-            gh api "repos/$REPO/pulls/$PR/reviews" \
-              --jq '.[] | select(.state != "PENDING")
-                    | "— " + .user.login + " (" + .state + ", on " + .commit_id[0:7] + "):\n" + (.body // "(no body)")'
+            echo "===== THE CURRENT REVIEW: ACT ON THIS ONE ====="
+            jq -r 'last // empty
+                   | "— " + .user.login + " (" + .state + ", on " + .commit_id[0:7] + "):\n" + (.body // "(no body)")' <<< "$REVIEWS"
             echo
-            echo "## The thread"
+            echo "===== EARLIER REVIEWS, AS HISTORY ====="
+            echo "A finding from an earlier review that still matters is repeated in the current one."
+            jq -r '.[:-1][]
+                   | "— " + .user.login + " (" + .state + ", on " + .commit_id[0:7] + "):\n" + (.body // "(no body)") + "\n"' <<< "$REVIEWS"
+            echo
+            echo "===== COMMENTS ON SPECIFIC LINES, OPEN ====="
+            jq -r ".[] | select($SETTLED | not) | $THREAD" <<< "$THREADS"
+            echo
+            echo "===== SETTLED BY A PERSON: DO NOT ACT ON THESE ====="
+            echo "A person resolved these threads. They are decided, whatever a review says."
+            jq -r ".[] | select($SETTLED) | $THREAD" <<< "$THREADS"
+            echo
+            echo "===== THE THREAD: ANYTHING A PERSON WROTE HERE OUTRANKS A REVIEW ====="
             gh pr view "$PR" --repo "$REPO" --json comments \
               -q '.comments[] | "— " + .author.login + ":\n" + .body'
           } > "$RUNNER_TEMP/context.md"
@@ -151,7 +205,7 @@ jobs:
                     --workflow CI --limit 1 --json conclusion,databaseId \
                     --jq '.[0] | select(.conclusion=="failure") | .databaseId')
             if [ -n "$RUN" ]; then
-              echo "## The failing CI job" >> "$RUNNER_TEMP/context.md"
+              echo "===== THE FAILING CI JOB =====" >> "$RUNNER_TEMP/context.md"
               gh run view "$RUN" --repo "$REPO" --log-failed >> "$RUNNER_TEMP/context.md" 2>/dev/null || true
               echo "task=Make CI pass. The failing job log is in the context file." >> "$GITHUB_OUTPUT"
             else
@@ -276,11 +330,16 @@ jobs:
 
           ${{ steps.ctx.outputs.task }}
 
-          Everything you need — the plan, the reviews, and any failing job log —
-          is in $RUNNER_TEMP/context.md. Read it first.
-
           Commit your work. Do not push; the workflow does that. If the plan in
           the pull request body is now wrong, say so in your final message.
+
+          Everything you need is below, in full: the issue, the pull request and
+          its plan, the current review, earlier reviews, comments on specific
+          lines, the thread, and any failing job log. Do not go looking for it.
+
+          ----- BEGIN CONTEXT -----
+          $(cat "$RUNNER_TEMP/context.md")
+          ----- END CONTEXT -----
           PROMPT
 
           # WHEN IS A REWORK FINISHED? A clean tree AND a commit beyond what is

@@ -110,9 +110,39 @@ type Finding = {
 	severity: "important" | "nit";
 	pass: "bugs" | "security" | "compliance";
 	text: string;
+	example?: string;
+	fix?: string;
 	path?: string;
 	line?: number;
 };
+
+/**
+ * An important finding sends the change to rework, so it has to tell rework
+ * what "fixed" means. The first rework of #96 answered findings like "the logic
+ * should be explicit" with comments and token changes (`NOTES.md` 78, 79).
+ * Every important finding now carries a concrete example (an input, what
+ * happens now, and what should happen) and what to change. Nits stay one line.
+ */
+function missingDetail(findings: Finding[]): string[] {
+	return findings.flatMap((f, i) =>
+		f.severity !== "important"
+			? []
+			: [
+					...(f.example?.trim() ? [] : [`finding ${i + 1} ("${f.text.slice(0, 50)}") has no example`]),
+					...(f.fix?.trim() ? [] : [`finding ${i + 1} ("${f.text.slice(0, 50)}") has no fix`]),
+				],
+	);
+}
+
+/** One finding as a reader sees it: the line, then the example and the fix. */
+function renderFinding(f: Finding): string {
+	const tag = f.severity === "important" ? "Important" : "Nit";
+	const where = f.path ? ` (\`${f.path}${f.line ? `:${f.line}` : ""}\`)` : "";
+	const lines = [`- [${tag}] ${f.text}${where}`];
+	if (f.example?.trim()) lines.push(`  - **Example:** ${f.example.trim()}`);
+	if (f.fix?.trim()) lines.push(`  - **Change:** ${f.fix.trim()}`);
+	return lines.join("\n");
+}
 
 /**
  * The verdict follows from the findings; the reviewer does not choose it
@@ -145,10 +175,7 @@ function renderReview(summary: string | undefined, findings: Finding[], question
 		const here = findings.filter((f) => f.pass === pass);
 		if (here.length === 0) continue;
 		out.push(`## ${titles[pass]}`, "");
-		for (const f of here) {
-			const where = f.path ? ` (\`${f.path}${f.line ? `:${f.line}` : ""}\`)` : "";
-			out.push(`- [${f.severity === "important" ? "Important" : "Nit"}] ${f.text}${where}`);
-		}
+		for (const f of here) out.push(renderFinding(f));
 		out.push("");
 	}
 	if (questions.length > 0) {
@@ -185,6 +212,7 @@ function reviewTool(pi: ExtensionAPI) {
 			// findings should be fixed, which stopped the chain for nothing
 			// (`NOTES.md` 78). Stated here as well as in the role file (NOTES 57).
 			"A question is only for what a person must decide: intent, scope, or a trade-off. Never ask whether your own findings should be fixed; an important finding is rework, not a question.",
+			"Every important finding needs an example (the input, what happens now, what should happen) and a fix (what to change). submit_review refuses one without them.",
 		],
 		parameters: Type.Object({
 			// `StringEnum`, not `Type.Union([Type.Literal(…)])`. The union form
@@ -204,7 +232,16 @@ function reviewTool(pi: ExtensionAPI) {
 						description: "important: must change before this merges. nit: worth saying, does not block.",
 					}),
 					pass: StringEnum(["bugs", "security", "compliance"] as const),
-					text: Type.String({ description: "The finding: what is wrong, and what to change." }),
+					text: Type.String({ description: "What is wrong, in one or two sentences." }),
+					example: Type.Optional(
+						Type.String({
+							description:
+								"Required for important: a concrete case — the input, what happens now, and what should happen.",
+						}),
+					),
+					fix: Type.Optional(
+						Type.String({ description: "Required for important: what to change, specifically enough to act on." }),
+					),
 					path: Type.Optional(Type.String({ description: "File path as the diff shows it, for a finding about a line." })),
 					line: Type.Optional(Type.Integer({ description: "Line number in the NEW version of the file." })),
 				}),
@@ -220,16 +257,19 @@ function reviewTool(pi: ExtensionAPI) {
 
 		async execute(_id, params) {
 			const findings = params.findings as Finding[];
+			const missing = missingDetail(findings);
+			if (missing.length) {
+				throw new Error(
+					`Nothing was posted. Every important finding needs an example and a fix, because rework acts on them:\n- ${missing.join("\n- ")}\n` +
+						"Add them, or mark the finding a nit if it does not need to change before merging. Call submit_review again.",
+				);
+			}
 			const questions = (params.questions ?? []).filter((q) => q.trim());
 			const event = verdictFor(findings, questions);
 			const body = renderReview(params.summary, findings, questions);
 			const inline = findings
 				.filter((f) => f.path && f.line)
-				.map((f) => ({
-					path: f.path as string,
-					line: f.line as number,
-					body: `[${f.severity === "important" ? "Important" : "Nit"}] ${f.text}`,
-				}));
+				.map((f) => ({ path: f.path as string, line: f.line as number, body: renderFinding(f).replace(/^- /, "") }));
 
 			const repo = process.env.PI_REPO;
 			const pr = process.env.PI_PR;

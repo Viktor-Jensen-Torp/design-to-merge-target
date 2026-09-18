@@ -74,6 +74,12 @@ written afterwards than to have been followed. Say so if you see it.
 - **`findings`** is every finding, one item each: its `severity` (`important`
   or `nit`), its `pass` (`bugs`, `security` or `compliance`), and its `text`.
   A finding about one line also carries `path` and `line`.
+- **Every `important` finding also carries an `example` and a `fix`.** The
+  example is a concrete case: the input, what happens now, and what should
+  happen. The fix says what to change, specifically enough to act on.
+  Rework acts on these; "the logic should be explicit" gives it nothing to do,
+  and on #96 it answered exactly that with a comment. The tool refuses an
+  important finding without both. A nit stays one line.
 - **`questions`** is what only a person can answer. Leave it out if there is
   nothing.
 - **`summary`** is optional: anything a reader needs that is not a finding,
@@ -110,6 +116,10 @@ The tool writes `commit_id` for you. **You do not state the head SHA anywhere**
 | any question, with or without `important` findings | `COMMENT` | the chain stops until a person answers |
 | `important` findings and no question | `REQUEST_CHANGES` | the implementer reworks it |
 | neither | `APPROVE` | the gatekeeper decides on merging |
+
+**A line comment a person has resolved is settled.** Your prompt lists any. Do
+not raise them again, and do not count them as unresolved, whatever the code
+still looks like: a person decided.
 
 So the one judgement that matters is severity, and it has to be honest.
 **`important`** is reserved for what would break behaviour, leak data, or breach
