@@ -41,7 +41,7 @@ link the pull request that changed the design. Do not cite a file path and
 commit as the source of truth (`0001`).
 
 Leave Priority and Effort to refinement unless the person already knows them.
-**Never add `ready-to-develop`.** A person gates each issue after refinement.
+**Never add `active:agent`.** A person gates each issue after refinement.
 
 ## 4. Link them
 

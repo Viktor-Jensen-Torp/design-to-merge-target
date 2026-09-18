@@ -127,7 +127,7 @@ jobs:
             fi
             # Clear every label that says WHERE IN THE PIPELINE the issue is.
             # `in:develop` alone was not enough: issue #4 shipped and closed
-            # still carrying `ready-to-develop`, which reads as queued work
+            # still carrying `active:agent`, which reads as queued work
             # (`NOTES.md` 31). `needs:human` and `needs:rework` are deliberately
             # left — an issue that shipped while carrying one is information,
             # not litter.
@@ -138,7 +138,7 @@ jobs:
             # minute across the whole repository.
             STALE=$(gh issue view "$N" --json labels \
                       -q '[.labels[].name
-                           | select(. == "in:develop" or . == "ready-to-develop"
+                           | select(. == "in:develop" or . == "active:agent"
                                     or startswith("attempt:"))]
                           | join(",")')
             # An `if`, not `[ -n "$STALE" ] && ...`. Under `set -e` a failing

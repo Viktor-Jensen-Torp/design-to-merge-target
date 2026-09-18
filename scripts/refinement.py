@@ -91,10 +91,13 @@ def has_problem(body: str) -> bool:
     return False
 
 
-# Waiting on a person, so re-reading them every night would only churn:
+# Being worked, or waiting on a person, so re-reading them every night would
+# only churn. `active:agent` and `active:human` mean someone is working the
+# issue now (`0017`): the refiner must not rewrite a body being worked from.
 # needs:shape has no Problem to refine, and the other three are already
-# someone's to answer.
-SKIP = ("ready-to-develop", "needs:human", "needs:shape", "needs:split", "needs:spike")
+# someone's to answer. An assignee is NOT here: it means responsible, not
+# working, and a person is expected to be assigned to everything.
+SKIP = ("active:agent", "active:human", "needs:human", "needs:shape", "needs:split", "needs:spike")
 
 
 def gather(gh: GitHub, limit: int, out: str) -> int:
@@ -106,9 +109,7 @@ def gather(gh: GitHub, limit: int, out: str) -> int:
     waiting on a person are re-read each night. That costs tokens, not edits,
     and the run summary lists them.
     """
-    # `no:assignee`: an issue a person has assigned to themselves is theirs.
-    # The refiner must not rewrite a body someone is working from (`0008`).
-    query = " ".join(f'-label:"{l}"' for l in SKIP) + " no:assignee sort:updated-asc"
+    query = " ".join(f'-label:"{l}"' for l in SKIP) + " sort:updated-asc"
     r = subprocess.run(["gh", "issue", "list", "--repo", gh.repo, "--state", "open", "--search", query,
                         "--limit", str(limit), "--json", "number,title,body,labels,updatedAt"],
                        capture_output=True, text=True)
@@ -155,8 +156,8 @@ def apply_one(gh: GitHub, d: dict, read_at: str | None) -> list[str]:
         labels = {l["name"] for l in cur.get("labels", [])}
         if cur["state"] != "open":
             raise Failed("closed since the batch was read; nothing applied")
-        if "ready-to-develop" in labels:
-            raise Failed("gated with ready-to-develop since the batch was read; nothing applied")
+        if "active:agent" in labels:
+            raise Failed("gated with active:agent since the batch was read; nothing applied")
         if read_at and cur["updated_at"] != read_at:
             raise Failed(f"changed since the batch was read ({read_at} -> {cur['updated_at']}); nothing applied")
 
@@ -248,7 +249,7 @@ def apply(a) -> int:
     else:
         out.append("Nothing to refine. This run wrote nothing, which is a correct outcome.")
     if report["ready"]:
-        out += ["", "**Ready, waiting for a person to add `ready-to-develop`:** "
+        out += ["", "**Ready, waiting for a person to add `active:agent`:** "
                 + ", ".join(f"#{n}" for n in report["ready"])]
     text = "\n".join(out) + "\n"
     print(text)

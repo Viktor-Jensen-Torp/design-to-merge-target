@@ -32,7 +32,7 @@ permissions:
 
 jobs:
   implement:
-    if: github.event.label.name == 'ready-to-develop'
+    if: github.event.label.name == 'active:agent'
     runs-on: ubuntu-latest
     # An App installation token expires after one hour (NOTES.md section 9).
     # Do not raise this past ~55 without re-minting the token mid-job.
@@ -344,7 +344,7 @@ jobs:
             echo "run — it spends no attempt. $RUN"
           } > "$RUNNER_TEMP/handover.md"
           gh issue comment "$N" --repo "$REPO" --body-file "$RUNNER_TEMP/handover.md"
-          gh issue edit "$N" --repo "$REPO" --add-label needs:human --remove-label ready-to-develop
+          gh issue edit "$N" --repo "$REPO" --add-label needs:human --remove-label active:agent
           echo "issue #$N -> needs:human"
 
       # There is deliberately no "assert the agent did something" step here any
@@ -417,7 +417,7 @@ jobs:
           RUN: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           if gh issue view "$N" --json labels -q '.labels[].name' | grep -qx 'attempt:1'; then
-            gh issue edit "$N" --add-label needs:human --remove-label ready-to-develop
+            gh issue edit "$N" --add-label needs:human --remove-label active:agent
             gh issue comment "$N" --body "Second attempt failed; a human owns this now. $RUN"
           else
             gh issue edit "$N" --add-label attempt:1

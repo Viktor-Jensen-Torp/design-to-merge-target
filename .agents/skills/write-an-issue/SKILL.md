@@ -43,9 +43,12 @@ read those headings, and an issue without a Problem section is labelled
   upgraded, say so in the Problem. A person does that part.
 - **Blocked by.** If it cannot start until another issue lands, set that
   relationship in the sidebar, or leave it for the refiner.
-- **Do not add `ready-to-develop`.** That label is a person's approval that the
+- **Assign the person responsible**, usually the owner of the epic it belongs
+  to. An assignee means responsible, not working on it.
+- **Do not add `active:agent`.** That label is a person's approval that the
   issue is ready for an agent, given after refinement. It is the only gate before
-  a pull request exists.
+  a pull request exists. If *you* are about to work on it yourself, add
+  `active:human` instead, and remove it when you stop.
 
 ## Creating it
 

@@ -257,7 +257,7 @@ function reviewTool(pi: ExtensionAPI) {
  * trusted to follow.
  *
  * Everything the refiner may do has a field here, and nothing else does. There
- * is no label field, so `ready-to-develop` cannot be applied by construction.
+ * is no label field, so `active:agent` cannot be applied by construction.
  * `PI_BATCH` holds the issue numbers the workflow gave it, and a decision about
  * any other issue is refused. Gated issues are never in the batch.
  */
@@ -299,7 +299,7 @@ function refinementTool() {
 		parameters: Type.Object({
 			summary: Type.String({ description: "Two or three sentences on what this run found." }),
 			ready: Type.Array(Type.Integer({ minimum: 1 }), {
-				description: "Issues you judge ready for a person to gate with ready-to-develop.",
+				description: "Issues you judge ready for a person to gate with active:agent.",
 			}),
 			issues: Type.Array(
 				Type.Object({
