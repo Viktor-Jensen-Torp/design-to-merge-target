@@ -37,15 +37,12 @@ export function uniqueSlug(title: string, taken: Iterable<string>): string {
 
     const candidate = cleanBase + "-" + suffix;
     if (!takenSet.has(candidate)) {
-      // Verify the candidate is within the length cap
-      if (candidate.length <= MAX_SLUG_LENGTH) {
-        return candidate;
-      }
+      return candidate;
     }
 
     suffix++;
-    // Safety valve: if we've tried too many suffixes, give up
-    if (suffix > MAX_SLUG_LENGTH) {
+    // Safety valve: exit after trying enough suffixes; also prevents premature exit for valid candidates like `a-61`
+    if (suffix > MAX_SLUG_LENGTH + 2) {
       return "";
     }
   }
