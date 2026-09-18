@@ -17,8 +17,11 @@ it again.
 
 ## Write the plan before you write code
 
-Your first action after reading is to write a plan and put it in the pull
-request body draft at `$RUNNER_TEMP/plan.md`:
+Your first action after reading is to write a plan and put it in the plan file
+your prompt names, which becomes the pull request body. Use that exact path.
+Your file tools do not expand variables such as `$RUNNER_TEMP`, so writing to a
+path that contains one creates a folder with that literal name in the
+repository:
 
 - the files you will change, and what changes in each;
 - the order of the work;
@@ -43,8 +46,9 @@ conditional — a loosened gate is escalated to a human and the run is wasted.
 ## If you are reworking
 
 Sometimes you are not starting fresh: the pull request exists and something sent
-it back. The prompt names the task, and everything you need is in the context
-file it points at — the plan, the review thread, and any failing job log.
+it back. The prompt names the task and carries everything you need: the issue,
+the plan, the current review, earlier reviews, comments on specific lines, the
+thread, and any failing job log.
 
 Three things change:
 
@@ -90,8 +94,8 @@ paid for out of the same clock as the work.
 Stopping with a clear reason is a good outcome. Inventing your way around a gate
 you cannot satisfy is not.
 
-But your final message is read by nobody. **Write the reason to
-`$RUNNER_TEMP/needs-human.md` and stop.** The workflow posts it as a comment and
+But your final message is read by nobody. **Write the reason to the
+needs-human file your prompt names, and stop.** The workflow posts it as a comment and
 labels the issue `needs:human`, so a person arrives at your reasoning rather
 than at a failed job they have to open the logs of.
 

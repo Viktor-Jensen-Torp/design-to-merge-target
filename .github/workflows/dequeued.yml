@@ -1,0 +1,121 @@
+# Dropped from the merge queue. Decide why, and send an agent's pull request
+# back when the reason is work that landed ahead of it (`0009`, `0010`).
+#
+# Goes in the TARGET repo at .github/workflows/dequeued.yml.
+#
+# WHY THIS TRIGGER. With agents working in parallel, a pull request regularly
+# leaves the queue because another one merged first. There are two ways that
+# happens, and until 2026-09-18 only one reached the pipeline (`NOTES.md` 80):
+#
+#   - The queue's test build FAILS alongside the entries ahead of it. That
+#     produces a CI run, which triage used to watch for.
+#   - The change now CLASHES textually with the entry ahead of it. GitHub drops
+#     it without building anything, so no CI run exists and nothing noticed.
+#     Found on #101, dropped when #100 merged ahead of it.
+#
+# `pull_request: dequeued` fires whenever a pull request leaves the queue, for
+# any reason, so one trigger covers both. The events page does not document
+# the reason as part of the payload, so this job reads the pull request itself.
+#
+# Requires, in the target repo: the reviewer App (vars.REVIEWER_CLIENT_ID,
+# secrets.REVIEWER_APP_PRIVATE_KEY), which triage already uses to send pull
+# requests back, and the labels needs:rework, needs:human and queue:failed.
+
+name: Dequeued
+
+# `pull_request_target`, not `pull_request`: a `pull_request` workflow does not
+# run at all while the pull request has a merge conflict, and a clash is the
+# main thing this job exists for (`NOTES.md` 82). This job checks out nothing
+# and runs no code from the pull request; it only reads it through the API.
+on:
+  pull_request_target:
+    types: [dequeued]
+
+concurrency:
+  group: dequeued-${{ github.event.pull_request.number }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  route:
+    # Agent pull requests only. A person's pull request stays with that person
+    # (`0008`): they see the queue drop it and decide.
+    if: contains(github.event.pull_request.labels.*.name, 'agent')
+      && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      # An App token, not GITHUB_TOKEN: the label this job adds has to start
+      # rework.yml, and a GITHUB_TOKEN-authored event starts no workflow
+      # (`NOTES.md` 6).
+      - uses: actions/create-github-app-token@v3
+        id: token
+        with:
+          client-id: ${{ vars.REVIEWER_CLIENT_ID }}
+          private-key: ${{ secrets.REVIEWER_APP_PRIVATE_KEY }}
+
+      - name: Why did it leave the queue?
+        env:
+          GH_TOKEN: ${{ steps.token.outputs.token }}
+          PR: ${{ github.event.pull_request.number }}
+          REPO: ${{ github.repository }}
+          SENDER: ${{ github.event.sender.login }}
+        run: |
+          set -euo pipefail
+
+          # 1. Merged? A pull request that merges leaves the queue in the same
+          #    second (#94, #100), so wait for the state to settle rather than
+          #    read it once. `mergeable` is computed lazily and starts UNKNOWN.
+          for i in $(seq 1 12); do
+            S=$(gh pr view "$PR" --repo "$REPO" --json state,mergeable -q '.state + " " + .mergeable')
+            case "$S" in
+              MERGED*|CLOSED*) echo "Pull request #$PR is ${S%% *}. Nothing to do."; exit 0 ;;
+              "OPEN MERGEABLE"|"OPEN CONFLICTING") break ;;
+            esac
+            sleep 5
+          done
+          echo "state after waiting: $S"
+
+          # 2. It clashes with work that landed ahead of it. rework.yml sees
+          #    CONFLICTING itself: it spends the conflict budget, not a strike,
+          #    and its task is to rebase onto develop and resolve.
+          if [ "$S" = "OPEN CONFLICTING" ]; then
+            gh pr comment "$PR" --repo "$REPO" --body "Dropped from the merge queue: this now clashes with work that merged ahead of it. Back to the implementer to redo it on top of the new \`develop\`. A clash does not count as a strike (ADR 0009)."
+            gh pr edit "$PR" --repo "$REPO" --add-label needs:rework
+            echo "clash -> needs:rework"
+            exit 0
+          fi
+
+          # 3. The queue's test build failed alongside the entries ahead of it.
+          #    The merge-group branch is gh-readonly-queue/<base>/pr-<n>-<sha>
+          #    (`NOTES.md` 16). Only a build started after the latest enqueue
+          #    counts, so an old failure is never re-reported.
+          SINCE=$(gh api "repos/$REPO/issues/$PR/timeline?per_page=100" \
+                    --jq '[.[] | select(.event == "added_to_merge_queue") | .created_at] | last // ""')
+          # Piped to jq: gh's own --jq takes no --arg (review.yml says the same).
+          FAILED=$(gh run list --repo "$REPO" --workflow CI --event merge_group --limit 30 \
+                     --json headBranch,conclusion,createdAt,databaseId \
+                   | jq -r --arg pr "$PR" '[.[] | select(.headBranch | test("/pr-" + $pr + "-"))] | first // empty
+                                           | select(.conclusion == "failure") | .createdAt + " " + (.databaseId | tostring)')
+          if [ -n "$FAILED" ] && [ "${FAILED%% *}" \> "$SINCE" ]; then
+            RUN="${FAILED##* }"
+            gh pr comment "$PR" --repo "$REPO" --body "Dropped from the merge queue: its test build failed alongside the work ahead of it, though it passes on its own. Back to the implementer to make it work with the new \`develop\`. This does not count as a strike (ADR 0009). Build: ${{ github.server_url }}/$REPO/actions/runs/$RUN"
+            gh pr edit "$PR" --repo "$REPO" --add-label needs:rework --add-label queue:failed
+            echo "failed queue build $RUN -> needs:rework, queue:failed"
+            exit 0
+          fi
+
+          # 4. A person took it out. Their call; say nothing.
+          if [ "$SENDER" != "github-merge-queue[bot]" ]; then
+            echo "Removed from the queue by $SENDER. A person decided; nothing to do."
+            exit 0
+          fi
+
+          # 5. The queue dropped it and none of the above explains why. Silence
+          #    would leave it sitting unnoticed, which is how #101 was found, so
+          #    hand it to a person.
+          gh pr comment "$PR" --repo "$REPO" --body "Dropped from the merge queue for a reason the pipeline could not work out: it is not merged, does not clash, and its queue build did not fail. A human should look."
+          gh pr edit "$PR" --repo "$REPO" --add-label needs:human
+          echo "unexplained -> needs:human"

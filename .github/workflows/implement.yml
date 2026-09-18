@@ -164,6 +164,8 @@ jobs:
             || { echo "::error::.pi/extensions/protect.ts missing — the root of trust is unguarded in-loop"; exit 1; }
           test -s .pi/extensions/sanity.ts \
             || { echo "::error::.pi/extensions/sanity.ts missing — corrupted tool arguments would go unnoticed"; exit 1; }
+          test -s .pi/extensions/permission-gate.ts \
+            || { echo "::error::.pi/extensions/permission-gate.ts missing — dangerous shell commands would run unchecked"; exit 1; }
           test -s .pi/extensions/debug.ts \
             || { echo "::error::.pi/extensions/debug.ts missing"; exit 1; }
 
@@ -220,8 +222,13 @@ jobs:
             printf -- '----- BEGIN ISSUE #%s -----\n' "$N"
             cat "$RUNNER_TEMP/issue.md"
             printf -- '\n----- END ISSUE #%s -----\n\n' "$N"
-            printf 'Write your plan to %s/plan.md before you write any code.\n' "$RUNNER_TEMP"
+            # Absolute paths, expanded here. Pi's file tools resolve ~ and
+            # absolute paths but never expand $VARIABLES, so a path the agent
+            # is given as `$RUNNER_TEMP/...` becomes a literal folder in the
+            # repository (`NOTES.md` 81).
+            printf 'Your plan file: %s/plan.md. Write your plan there before you write any code.\n' "$RUNNER_TEMP"
             printf 'It becomes the pull request body.\n'
+            printf 'Your needs-human file: %s/needs-human.md, for when you cannot finish.\n' "$RUNNER_TEMP"
           } > "$RUNNER_TEMP/prompt.md"
 
           # Two channels, doing two jobs (NOTES.md section 2):
