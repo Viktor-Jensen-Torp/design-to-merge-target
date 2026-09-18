@@ -181,6 +181,10 @@ function reviewTool(pi: ExtensionAPI) {
 			"Use submit_review as your final action. It is the only thing that ends a review.",
 			"Give every finding a severity: important if it must change before this merges, nit otherwise. The verdict follows from these.",
 			"Put a finding about one line on that line with path and line. Put questions you cannot settle yourself in questions.",
+			// 2026-09-18, #96: a review asked a person whether its own important
+			// findings should be fixed, which stopped the chain for nothing
+			// (`NOTES.md` 78). Stated here as well as in the role file (NOTES 57).
+			"A question is only for what a person must decide: intent, scope, or a trade-off. Never ask whether your own findings should be fixed; an important finding is rework, not a question.",
 		],
 		parameters: Type.Object({
 			// `StringEnum`, not `Type.Union([Type.Literal(…)])`. The union form
@@ -208,7 +212,8 @@ function reviewTool(pi: ExtensionAPI) {
 			),
 			questions: Type.Optional(
 				Type.Array(Type.String(), {
-					description: "Questions only a person can answer. Any question stops the change until a person answers.",
+					description:
+						"Only what a person must decide: intent, scope, or a trade-off. Never whether your own findings should be fixed. Any question stops the change until a person answers.",
 				}),
 			),
 		}),
