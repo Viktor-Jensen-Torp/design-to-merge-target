@@ -128,6 +128,7 @@ function reviewTool(pi: ExtensionAPI) {
 			"Use submit_review as your final action. It is the only thing that ends a review.",
 			"submit_review takes the verdict as its event: APPROVE, REQUEST_CHANGES, or COMMENT.",
 			"Put findings about a specific line in submit_review's comments array, anchored to path and line.",
+			"The event follows the findings: any [Important] finding is REQUEST_CHANGES; none is APPROVE; COMMENT is only for a question with no [Important] finding. submit_review refuses a mismatch.",
 		],
 		parameters: Type.Object({
 			// `StringEnum`, not `Type.Union([Type.Literal(…)])`. The union form
@@ -155,6 +156,31 @@ function reviewTool(pi: ExtensionAPI) {
 		}),
 
 		async execute(_id, params) {
+			// The event must match the findings (reviewer.md, "Which event").
+			// On 2026-09-18 a review listed two [Important] findings and submitted
+			// COMMENT, so the gatekeeper read it as "unsure" and escalated to a
+			// person instead of sending it to rework (`NOTES.md` 77). The rule was
+			// in the role file; this makes it a gate. Checked before anything is
+			// posted, so a mismatch costs one turn, not a review.
+			const important = [params.body, ...(params.comments ?? []).map((c) => c.body)]
+				.join("\n")
+				.match(/\[Important\]/gi)?.length ?? 0;
+			if (important > 0 && params.event !== "REQUEST_CHANGES") {
+				throw new Error(
+					`Nothing was posted. You listed ${important} [Important] finding(s) and chose ${params.event}. ` +
+						"An [Important] finding is one that must change before this merges, and that is REQUEST_CHANGES. " +
+						"If it is really a question you cannot settle, write it as a question without the [Important] tag and use COMMENT. " +
+						"Call submit_review again.",
+				);
+			}
+			if (important === 0 && params.event === "REQUEST_CHANGES") {
+				throw new Error(
+					"Nothing was posted. You chose REQUEST_CHANGES with no [Important] finding. Nits do not block: " +
+						"use APPROVE, or COMMENT if you have a question. If something must change, tag it [Important]. " +
+						"Call submit_review again.",
+				);
+			}
+
 			const repo = process.env.PI_REPO;
 			const pr = process.env.PI_PR;
 			if (!repo || !pr) {
