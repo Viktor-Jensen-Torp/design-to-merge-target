@@ -22,8 +22,16 @@ on:
     # which is worst at the top of the hour (`NOTES.md` 67). A run that was
     # dropped leaves no trace except its absence from the Actions history.
     - cron: '17 3 * * *'
-  # How the role is tested without waiting for a night.
+  # How the role is tested without waiting for a night. `ref` runs the role
+  # file, scripts and Pi config from a branch, so a fix can be tried before it
+  # is merged and released: `gh workflow run refine.yml --ref <branch> -f ref=<branch>`.
+  # Only people with write access can dispatch. The nightly run has no inputs,
+  # so it always reads `develop`.
   workflow_dispatch:
+    inputs:
+      ref:
+        description: "branch to take the role, scripts and Pi config from"
+        default: develop
 
 # One refiner at a time: two runs over the same backlog would decide about the
 # same issues twice. A dispatch during a run waits, and a later one replaces it.
@@ -67,7 +75,7 @@ jobs:
       # and no credentials are left in .git/config.
       - uses: actions/checkout@v5
         with:
-          ref: develop
+          ref: ${{ inputs.ref || 'develop' }}
           persist-credentials: false
 
       - uses: actions/setup-node@v7
@@ -93,6 +101,25 @@ jobs:
           [[ "$PRIORITY_FIELD_ID" =~ ^[0-9]+$ ]] || { echo "::error::vars.PRIORITY_FIELD_ID is not a field id"; exit 1; }
           [[ "$EFFORT_FIELD_ID" =~ ^[0-9]+$ ]] || { echo "::error::vars.EFFORT_FIELD_ID is not a field id"; exit 1; }
           test -n "$REFINE_MODEL" || { echo "::error::vars.REFINE_MODEL is not set"; exit 1; }
+
+      # Pi reads models.json ONLY from its agent directory, ~/.pi/agent, never
+      # from a project's .pi/ (`models.md`, and every models.json path in Pi's
+      # code; `NOTES.md` 72). The copy deployed at .pi/models.json was never
+      # read, so no role's sampling or routing ever reached the wire. And a
+      # model missing from Pi's catalogue silently runs as a copy of another
+      # model, with no settings at all. Both are asserted here, before any model
+      # is called.
+      - name: Install the model config where Pi reads it
+        env:
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          REFINE_MODEL: ${{ vars.REFINE_MODEL }}
+        run: |
+          mkdir -p ~/.pi/agent
+          cp .pi/models.json ~/.pi/agent/models.json
+          pi --list-models openrouter < /dev/null > "$RUNNER_TEMP/models.txt" 2>&1 || true
+          grep -qF -- "$REFINE_MODEL" "$RUNNER_TEMP/models.txt" \
+            || { echo "::error::Pi does not know $REFINE_MODEL. It would run as a copy of another model, with none of its settings (NOTES.md 72). Declare it under models in .pi/models.json."; exit 1; }
+          echo "Pi knows $REFINE_MODEL, so its models.json settings apply"
 
       # The agent is GIVEN the batch. It is not asked to find it (`NOTES.md` 23).
       - name: Gather the batch
@@ -122,6 +149,11 @@ jobs:
           PI_REPORT: ${{ runner.temp }}/refinement.json
           PI_BATCH: ${{ runner.temp }}/batch.json
           PI_OFFLINE: "1"
+          # The request logger (.pi/extensions/debug.ts), one summary line per
+          # request: the model, the sampling that reached the wire, and the
+          # routing block. On while this role is new, because the first real
+          # run went out without its sampling and nothing showed it (`NOTES.md` 72).
+          PI_DEBUG_PROVIDER: "1"
           REPO: ${{ github.repository }}
         run: |
           {
@@ -141,7 +173,8 @@ jobs:
           DONE
 
           # --tools is an allowlist (`PRD.md`): when Pi gains a tool, this role
-          # does not silently gain it. It needs no edit or write tool, and `bash`
+          # does not silently gain it. No `find`: it needs `fd`, which the runner
+          # lacks, and it failed on the first real run (`NOTES.md` 71). It needs no edit or write tool, and `bash`
           # is there for `gh` and grep. The token is what stops it writing.
           # --no-skills: the human skills in .agents/skills/ (`0015`) are for people's
           # harnesses. Pi discovers that directory by itself, and without the flag
@@ -160,7 +193,7 @@ jobs:
             -- pi --mode rpc --approve --no-skills --provider openrouter \
                   --append-system-prompt "$(cat .agents/refiner.md)" \
                   --model "${{ vars.REFINE_MODEL }}" \
-                  --tools read,grep,find,ls,bash,submit_refinement
+                  --tools read,grep,ls,bash,submit_refinement
 
       - name: Apply the decisions
         if: steps.gather.outputs.count != '0'

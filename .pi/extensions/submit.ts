@@ -295,6 +295,11 @@ function refinementTool() {
 			"Use submit_refinement once, as your final action, with every decision from this run.",
 			"submit_refinement changes nothing itself. The workflow applies your decisions after you stop, so do not try to edit issues with gh.",
 			"If nothing needs refining, call submit_refinement with an empty issues list. That is a correct outcome, not a failure.",
+			// The first real run read the same six files about fifteen times each
+			// and never submitted (`NOTES.md` 71). The role file says it too, but
+			// NOTES 57 is why it also goes here: beside the tool, where the model
+			// looks before it acts.
+			"Once you know what each issue needs, call submit_refinement. Do not re-read a file you have already read; your tool results are complete and nothing is truncated.",
 		],
 		parameters: Type.Object({
 			summary: Type.String({ description: "Two or three sentences on what this run found." }),
