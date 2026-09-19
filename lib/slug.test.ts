@@ -40,6 +40,14 @@ describe("slugify", () => {
     expect(slugify("a_b")).toBe("a-b");
   });
 
+  it("exotic dashes are collapsed to hyphens", () => {
+    expect(slugify("Hello — World")).toBe("hello-world");
+    expect(slugify("Hello – World")).toBe("hello-world");
+    expect(slugify("non‑breaking")).toBe("non-breaking");
+    expect(slugify("figure‒dash")).toBe("figure-dash");
+    expect(slugify("a—–‑‒b")).toBe("a-b");
+  });
+
   it("caps slug at 60 characters", () => {
     expect(slugify("a".repeat(100))).toHaveLength(60);
   });
