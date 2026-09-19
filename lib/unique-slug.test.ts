@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { uniqueSlug } from "./unique-slug";
+import { slugify } from "./slug";
 import { isSlug } from "./is-slug";
 
 describe("uniqueSlug", () => {
@@ -38,8 +39,14 @@ describe("uniqueSlug", () => {
   it("result satisfies isSlug whenever non-empty", () => {
     const titles = ["Hello World", "Room 101", "Just One Word"];
     for (const title of titles) {
-      const s = uniqueSlug(title, []);
+      const base = slugify(title);
+      const s = uniqueSlug(title, [base]);
       expect(isSlug(s)).toBe(s !== "");
     }
+  });
+
+  it("truncates base when 60-char base needs -2 suffix", () => {
+    const base = "a".repeat(60);
+    expect(uniqueSlug(base, [base])).toBe("a".repeat(58) + "-2");
   });
 });
