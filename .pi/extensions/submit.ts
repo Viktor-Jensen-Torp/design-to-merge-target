@@ -83,7 +83,17 @@ function implementationTool(pi: ExtensionAPI) {
 				);
 			}
 
-			const base = process.env.PI_BASE_REF || "origin/develop";
+			// Rework must add a commit to the pull request's branch, not merely
+			// have one beyond develop: the branch already has the first round's
+			// work. On #110 this tool accepted "1 commit beyond develop" while the
+			// driver's check, which compares with the remote branch, refused, so a
+			// rework that changed nothing was accepted here and failed there. The
+			// branch's upstream is what the driver compares with, so use it.
+			let base = process.env.PI_BASE_REF || "origin/develop";
+			if ((process.env.PI_ROLE ?? "").trim() === "rework") {
+				const up = await sh(pi, "git", ["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"]);
+				if (up.code === 0 && up.out) base = up.out;
+			}
 			const ahead = await sh(pi, "git", ["rev-list", "--count", `${base}..HEAD`]);
 			if (ahead.code !== 0) {
 				throw new Error(`Could not compare against ${base}: ${ahead.out}`);
@@ -147,6 +157,17 @@ function missingDetail(findings: Finding[]): string[] {
  * is collapsed on both sides, so indentation and line breaks do not matter.
  * Nits are not checked: they do not block.
  */
+/**
+ * A finding's path as the diff shows it. With the code checked out, reviewers
+ * pass absolute paths (#111: `/home/runner/work/.../code/lib/unique-slug.ts`),
+ * which GitHub cannot anchor and the quote check cannot find.
+ */
+function repoPath(path: string | undefined, root: string): string | undefined {
+	if (!path) return path;
+	const prefix = root.endsWith("/") ? root : `${root}/`;
+	return path.startsWith(prefix) ? path.slice(prefix.length) : path.replace(/^\.\//, "");
+}
+
 function unquoted(findings: Finding[], root: string): string[] {
 	const squash = (t: string) => t.replace(/\s+/g, " ").trim();
 	return findings.flatMap((f, i) => {
@@ -291,7 +312,7 @@ function reviewTool(pi: ExtensionAPI) {
 		}),
 
 		async execute(_id, params) {
-			const findings = params.findings as Finding[];
+			const findings = (params.findings as Finding[]).map((f) => ({ ...f, path: repoPath(f.path, process.cwd()) }));
 			const missing = missingDetail(findings);
 			if (missing.length) {
 				throw new Error(
