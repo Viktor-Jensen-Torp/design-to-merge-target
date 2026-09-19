@@ -26,6 +26,7 @@ harness reads (`docs/adr/0008`).
 | `extensions/submit.ts` | the terminating tool each role finishes with |
 | `extensions/protect.ts` | refuses writes to the root of trust, in-loop |
 | `extensions/sanity.ts` | refuses a tool call whose arguments have stopped making sense |
+| `extensions/permission-gate.ts` | refuses recursive deletes, `sudo` and `chmod 777` in bash. Adapted from Pi's own example (`NOTES.md` 81) |
 | `extensions/debug.ts` | records provider traffic. **Off unless `PI_DEBUG_PROVIDER` is set** |
 
 ## `settings.json`, and the one line that must not change

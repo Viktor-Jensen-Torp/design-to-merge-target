@@ -31,12 +31,17 @@ on:
 # One rework at a time per pull request. Two concurrent runs would push over
 # each other on the same branch.
 #
+# Only `needs:rework` shares the group. Every other label (a strike, `agent`)
+# also fires this workflow, and the job skips it, but in the same group it sat
+# pending behind the real run and was then cancelled, leaving a cancelled run
+# on the pull request (#96, 2026-09-18).
+#
 # KNOWN GAP (VERIFY.md S10): if a third trigger arrives, GitHub cancels the
 # pending run and `needs:rework` is left on the pull request with nothing
 # listening. A label is state; an event is not. The sweeper that closes this
 # is not built.
 concurrency:
-  group: rework-${{ github.event.pull_request.number }}
+  group: rework-${{ github.event.pull_request.number }}-${{ github.event.label.name == 'needs:rework' }}
   cancel-in-progress: false
 
 permissions:
@@ -58,11 +63,58 @@ jobs:
           client-id: ${{ vars.IMPLEMENTER_CLIENT_ID }}
           private-key: ${{ secrets.IMPLEMENTER_APP_PRIVATE_KEY }}
 
+      # The role file, the driver, the scripts and Pi's config (extensions,
+      # settings, models) come from `develop`, never from the pull request
+      # (`0019`). A pull request cut before a fix would otherwise run without it
+      # (round 3 of #96). They go outside the workspace, so they never dirty the
+      # tree the agent must leave clean, and the agent is never told where.
+      # First, because the staleness check below is one of them.
+      - name: Take the role and tools from develop
+        env:
+          GH_TOKEN: ${{ steps.token.outputs.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          TRUSTED="$HOME/pipeline-trusted"
+          SRC="$RUNNER_TEMP/develop-src"
+          mkdir -p "$TRUSTED" "$SRC"
+          git -C "$SRC" init -q
+          git -C "$SRC" fetch -q --depth=1 "https://x-access-token:${GH_TOKEN}@github.com/${REPO}.git" develop
+          git -C "$SRC" archive FETCH_HEAD .agents .pi scripts/pi-driver.py scripts/still-current.sh \
+            | tar -x -C "$TRUSTED"
+          for f in .agents/implementer.md .agents/nudge-implementer.md scripts/pi-driver.py scripts/still-current.sh \
+                   .pi/settings.json .pi/models.json .pi/extensions/submit.ts .pi/extensions/protect.ts \
+                   .pi/extensions/sanity.ts .pi/extensions/permission-gate.ts .pi/extensions/debug.ts; do
+            test -s "$TRUSTED/$f" || { echo "::error::$f missing from develop"; exit 1; }
+          done
+          echo "TRUSTED=$TRUSTED" >> "$GITHUB_ENV"
+          echo "role and tools from develop at $(git -C "$SRC" rev-parse --short FETCH_HEAD)"
+
+      # `0020`: this round is about the commit that was the head when the label
+      # went on. If the pull request has moved on since (a person pushed), the
+      # new commit's CI and review decide. Stop quietly, before a strike is
+      # counted, and take the label off so the next `needs:rework` can fire.
+      - name: Is this still the latest commit?
+        id: fresh
+        env:
+          GH_TOKEN: ${{ steps.token.outputs.token }}
+          PR: ${{ github.event.pull_request.number }}
+          REPO: ${{ github.repository }}
+          SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          C=$(bash "$TRUSTED/scripts/still-current.sh" "$PR" "$SHA") || { echo "::error::could not check #$PR"; exit 1; }
+          echo "$C" >> "$GITHUB_OUTPUT"
+          if [ "$C" != "current=true" ]; then
+            echo "Stale: a newer commit has its own chain. Nothing to rework."
+            gh pr edit "$PR" --repo "$REPO" --remove-label needs:rework || true
+          fi
+
       # ADR 0009 — three CONSECUTIVE strikes, and a separate budget for lost
       # races with develop. Labels are the only state that survives a run, and
       # unlike the run log they are visible on the pull request.
       - name: Count the strike
         id: count
+        if: steps.fresh.outputs.current == 'true'
         env:
           GH_TOKEN: ${{ steps.token.outputs.token }}
           PR: ${{ github.event.pull_request.number }}
@@ -119,29 +171,6 @@ jobs:
           ref: ${{ github.event.pull_request.head.ref }}
           fetch-depth: 0
           token: ${{ steps.token.outputs.token }}
-
-      # The role file, the driver and Pi's config (extensions, settings, models)
-      # come from `develop`, never from the pull request (`0019`: every role
-      # reads its instructions from one place, develop, for now). A pull request cut before a fix would otherwise run without
-      # it (round 3 of #96). They go outside the workspace, so they never dirty
-      # the tree the agent must leave clean, and the agent is never told where.
-      - name: Take the role and tools from develop
-        if: steps.count.outputs.stop == 'false'
-        env:
-          DEFAULT: develop
-        run: |
-          set -euo pipefail
-          TRUSTED="$HOME/pipeline-trusted"
-          mkdir -p "$TRUSTED"
-          git fetch -q --depth=1 origin "$DEFAULT"
-          git archive FETCH_HEAD .agents .pi scripts/pi-driver.py | tar -x -C "$TRUSTED"
-          for f in .agents/implementer.md .agents/nudge-implementer.md scripts/pi-driver.py \
-                   .pi/settings.json .pi/models.json .pi/extensions/submit.ts .pi/extensions/protect.ts \
-                   .pi/extensions/sanity.ts .pi/extensions/permission-gate.ts .pi/extensions/debug.ts; do
-            test -s "$TRUSTED/$f" || { echo "::error::$f missing from $DEFAULT"; exit 1; }
-          done
-          echo "TRUSTED=$TRUSTED" >> "$GITHUB_ENV"
-          echo "role and tools from $DEFAULT at $(git rev-parse --short FETCH_HEAD)"
 
       - name: Arm the local gates
         if: steps.count.outputs.stop == 'false'
@@ -479,6 +508,9 @@ jobs:
           GH_TOKEN: ${{ steps.token.outputs.token }}
           PR: ${{ github.event.pull_request.number }}
           REPO: ${{ github.repository }}
+          # `0022`: stopping with a reason spends no strike. Count the strike
+          # already added this round's label, so it comes off again here.
+          ROUND: ${{ steps.count.outputs.kind }}:${{ steps.count.outputs.n }}
           RUN: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           set -euo pipefail
@@ -490,9 +522,9 @@ jobs:
             echo "A deliberate stop, not a failed run — it spends no strike. $RUN"
           } > "$RUNNER_TEMP/handover.md"
           gh pr comment "$PR" --repo "$REPO" --body-file "$RUNNER_TEMP/handover.md"
-          gh pr edit "$PR" --repo "$REPO" --add-label needs:human --remove-label needs:rework
+          gh pr edit "$PR" --repo "$REPO" --add-label needs:human --remove-label "needs:rework,$ROUND"
           gh pr ready "$PR" --repo "$REPO" || true
-          echo "pull request #$PR -> needs:human"
+          echo "pull request #$PR -> needs:human, $ROUND taken back"
 
       - name: Publish
         if: steps.count.outputs.stop == 'false' && steps.askhuman.outputs.asked != 'true'
@@ -501,7 +533,17 @@ jobs:
           PR: ${{ github.event.pull_request.number }}
           REPO: ${{ github.repository }}
           BRANCH: ${{ github.event.pull_request.head.ref }}
+          SHA: ${{ github.event.pull_request.head.sha }}
+          ROUND: ${{ steps.count.outputs.kind }}:${{ steps.count.outputs.n }}
         run: |
+          # Checked again right before acting (`0020`). If someone pushed while
+          # this round ran, their commit wins: this work is dropped, quietly,
+          # and the round spends no strike.
+          if [ "$(bash "$TRUSTED/scripts/still-current.sh" "$PR" "$SHA")" != "current=true" ]; then
+            echo "Stale: the branch moved while this round ran. Not pushing."
+            gh pr edit "$PR" --repo "$REPO" --remove-label "needs:rework,$ROUND" || true
+            exit 0
+          fi
           git push --force-with-lease origin "HEAD:$BRANCH"
 
           # A commit is not delivered until it is on the remote.
@@ -518,6 +560,17 @@ jobs:
           gh pr comment "$PR" --repo "$REPO" \
             --body "Reworked: ${{ steps.ctx.outputs.task }}
           Now at \`$LOCAL\`. CI and review will run again."
+
+      # Every role keeps its transcript. Rework did not, so round 2 of #96
+      # could only be read from the job log (`NOTES.md` 83).
+      - name: Keep the transcript
+        if: always() && steps.count.outputs.stop == 'false'
+        uses: actions/upload-artifact@v7
+        with:
+          name: rpc-rework-pr-${{ github.event.pull_request.number }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/rpc.jsonl
+          if-no-files-found: warn
+          retention-days: 7
 
       - name: Escalate
         if: failure() && steps.count.outputs.stop == 'false'

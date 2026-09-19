@@ -30,7 +30,7 @@
  * serves every role and there is no second copy to disagree with the first.
  */
 
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { StringEnum } from "@earendil-works/pi-ai";
@@ -91,7 +91,11 @@ function implementationTool(pi: ExtensionAPI) {
 			if (ahead.out === "0") {
 				throw new Error(
 					`The tree is clean but there is no commit beyond ${base}. ` +
-						"A clean tree on its own is also true before any work starts. Commit your work.",
+						"A clean tree on its own is also true before any work starts. Commit your work. " +
+						// `0022`: on round 2 of #96 rework correctly found nothing to change,
+						// was refused here three times, and the run failed (`NOTES.md` 83).
+						"If you are reworking and the findings are already addressed or wrong, so there is genuinely nothing to change, " +
+						"do not invent a change: write why to the needs-human file your prompt names, and stop.",
 				);
 			}
 
@@ -114,6 +118,7 @@ type Finding = {
 	fix?: string;
 	path?: string;
 	line?: number;
+	quote?: string;
 };
 
 /**
@@ -132,6 +137,29 @@ function missingDetail(findings: Finding[]): string[] {
 					...(f.fix?.trim() ? [] : [`finding ${i + 1} ("${f.text.slice(0, 50)}") has no fix`]),
 				],
 	);
+}
+
+/**
+ * `0021`: an important finding quotes the code it is about, and the quote must
+ * be in that file at the reviewed commit, which is checked out in the working
+ * directory. On round 2 of #96 the reviewer repeated its previous review's
+ * finding about a line rework had already removed (`NOTES.md` 83). Whitespace
+ * is collapsed on both sides, so indentation and line breaks do not matter.
+ * Nits are not checked: they do not block.
+ */
+function unquoted(findings: Finding[], root: string): string[] {
+	const squash = (t: string) => t.replace(/\s+/g, " ").trim();
+	return findings.flatMap((f, i) => {
+		if (f.severity !== "important") return [];
+		const at = `finding ${i + 1} ("${f.text.slice(0, 50)}")`;
+		if (!f.path?.trim() || !f.quote?.trim()) return [`${at} has no path and quote`];
+		const file = join(root, f.path);
+		if (!existsSync(file)) return [`${at}: ${f.path} does not exist at this commit`];
+		if (!squash(readFileSync(file, "utf8")).includes(squash(f.quote))) {
+			return [`${at}: the quote is not in ${f.path} at this commit. Read the file as it is now; it may already be fixed`];
+		}
+		return [];
+	});
 }
 
 /** One finding as a reader sees it: the line, then the example and the fix. */
@@ -213,6 +241,7 @@ function reviewTool(pi: ExtensionAPI) {
 			// (`NOTES.md` 78). Stated here as well as in the role file (NOTES 57).
 			"A question is only for what a person must decide: intent, scope, or a trade-off. Never ask whether your own findings should be fixed; an important finding is rework, not a question.",
 			"Every important finding needs an example (the input, what happens now, what should happen) and a fix (what to change). submit_review refuses one without them.",
+			"When the code is checked out, every important finding also needs path and quote: a few lines copied exactly from that file as it is now. submit_review refuses a quote that is not there, because the code may already be fixed.",
 		],
 		parameters: Type.Object({
 			// `StringEnum`, not `Type.Union([Type.Literal(…)])`. The union form
@@ -244,6 +273,12 @@ function reviewTool(pi: ExtensionAPI) {
 					),
 					path: Type.Optional(Type.String({ description: "File path as the diff shows it, for a finding about a line." })),
 					line: Type.Optional(Type.Integer({ description: "Line number in the NEW version of the file." })),
+					quote: Type.Optional(
+						Type.String({
+							description:
+								"Required for important when the code is checked out: the code the finding is about, copied exactly from path as it is now. For something missing, quote the nearest code that is there.",
+						}),
+					),
 				}),
 				{ description: "Every finding, each with its severity. An empty list means nothing to report." },
 			),
@@ -264,6 +299,19 @@ function reviewTool(pi: ExtensionAPI) {
 						"Add them, or mark the finding a nit if it does not need to change before merging. Call submit_review again.",
 				);
 			}
+			// `PI_HEAD_SHA` is set only by a review.yml that checks the reviewed
+			// commit out (`0021`). An older review.yml sets neither, so the quote
+			// check and the pinning below stay off until it is released (`0019`).
+			const pinned = process.env.PI_HEAD_SHA?.trim();
+			if (pinned) {
+				const bad = unquoted(findings, process.cwd());
+				if (bad.length) {
+					throw new Error(
+						`Nothing was posted. An important finding must quote the code it is about, as it is at this commit:\n- ${bad.join("\n- ")}\n` +
+							"Fix the quote, or drop the finding if the code no longer has the problem. Call submit_review again.",
+					);
+				}
+			}
 			const questions = (params.questions ?? []).filter((q) => q.trim());
 			const event = verdictFor(findings, questions);
 			const body = renderReview(params.summary, findings, questions);
@@ -277,9 +325,37 @@ function reviewTool(pi: ExtensionAPI) {
 				throw new Error("PI_REPO and PI_PR are not set; the workflow must provide them.");
 			}
 
-			const head = await sh(pi, "gh", ["pr", "view", pr, "--repo", repo, "--json", "headRefOid", "--jq", ".headRefOid"]);
+			// `0020`: the review is about the commit the run was started for, not
+			// whatever the head is when it posts. Reading the head here stamped a
+			// review of one commit with another if a push landed mid-review.
+			const head = pinned
+				? { out: pinned, code: 0 }
+				: await sh(pi, "gh", ["pr", "view", pr, "--repo", repo, "--json", "headRefOid", "--jq", ".headRefOid"]);
 			if (head.code !== 0 || !head.out) {
 				throw new Error(`Could not read the head SHA of #${pr}: ${head.out}`);
+			}
+
+			// Checked right before acting (`0020`). A stale review is not posted
+			// and is not a failure: the newer commit gets its own review.
+			const check = process.env.PI_STILL_CURRENT;
+			if (pinned && check) {
+				const r = await pi.exec("bash", [check, pr, pinned]);
+				const answer = (r.stdout ?? "").trim();
+				if (answer === "current=false") {
+					return {
+						content: [
+							{
+								type: "text",
+								text: `Not posted: ${pinned.slice(0, 7)} is no longer the head of #${pr}. A newer commit has its own review coming. Your run is over.`,
+							},
+						],
+						details: { stale: true, commit: pinned },
+						terminate: true,
+					};
+				}
+				if (answer !== "current=true") {
+					throw new Error(`Could not check whether ${pinned.slice(0, 7)} is still the head: ${(r.stderr ?? "").trim()}`);
+				}
 			}
 
 			// `pi.exec` takes no stdin — ExecOptions is {signal, timeout, cwd} and
