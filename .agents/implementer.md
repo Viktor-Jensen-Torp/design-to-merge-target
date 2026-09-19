@@ -60,6 +60,11 @@ Three things change:
   it — the reviewer will raise it again and that costs another strike.
 - **Update the plan in the pull request body if it is now wrong.** Say so in
   your final message; the workflow handles the edit.
+- **If there is genuinely nothing to change, say so; do not invent a change.**
+  A finding can already be fixed, or be wrong. Check it against the code, and
+  if the code already does what the review asks, write why to the needs-human
+  file your prompt names and stop (`0022`). A person reads it, and no strike is
+  spent. A token change made to have something to commit is worse than none.
 
 ## Stop when
 
@@ -109,6 +114,8 @@ Use it when:
 - it is bigger than one issue and should be split;
 - a gate refuses something you believe is correct, and you would have to weaken
   the gate to proceed.
+- you are reworking, and the review's findings are already addressed or wrong,
+  so there is nothing to change.
 
 Say what you found, what you tried, and what you think should happen. One or two
 paragraphs. The person reading it has not seen anything you have seen.

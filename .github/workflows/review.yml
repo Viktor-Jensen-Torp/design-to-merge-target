@@ -30,6 +30,15 @@ on:
 permissions:
   contents: read
 
+# `0020`: only the latest commit counts. When CI completes again for the same
+# branch, a newer commit is being judged, and a review of the old one would only
+# be thrown away at the end. Cancelling it saves the run. `workflow_run` runs are
+# not checks on the pull request, so this should leave no red mark on it
+# (`NOTES.md` 33); that is unverified until one is seen.
+concurrency:
+  group: review-${{ github.event.workflow_run.head_branch }}
+  cancel-in-progress: true
+
 jobs:
   # ── Find the pull request, and turn a red build back without spending a token
   triage:
@@ -40,6 +49,9 @@ jobs:
     timeout-minutes: 5
     outputs:
       number: ${{ steps.pr.outputs.number }}
+      # The commit this whole run is about (`0020`): the one CI judged. Every
+      # later job reads, reviews and routes on this, never on "the head now".
+      sha: ${{ github.event.workflow_run.head_sha }}
       green: ${{ steps.pr.outputs.green }}
       blocked: ${{ steps.conflict.outputs.blocked }}
       risky: ${{ steps.risk.outputs.risky }}
@@ -55,6 +67,15 @@ jobs:
         with:
           client-id: ${{ vars.REVIEWER_CLIENT_ID }}
           private-key: ${{ secrets.REVIEWER_APP_PRIVATE_KEY }}
+
+      # The one staleness check (`0020`), from develop like every other script
+      # (`0019`). Nothing else is checked out here.
+      - uses: actions/checkout@v5
+        with:
+          ref: develop
+          sparse-checkout: |
+            scripts/still-current.sh
+          sparse-checkout-cone-mode: false
 
       # A CANCELLED CI run is not a red build. `ci.yml` cancels the run in
       # flight when a new commit is pushed, so a perfectly good pull request
@@ -107,6 +128,14 @@ jobs:
             echo "number=" >> "$GITHUB_OUTPUT"
             exit 0
           fi
+          # `0020`: CI judged $SHA. If the pull request has moved on, the newer
+          # commit's own CI run decides, and this one stops quietly.
+          C=$(bash scripts/still-current.sh "$NUM" "$SHA") || { echo "::error::could not check #$NUM"; exit 1; }
+          if [ "$C" != "current=true" ]; then
+            echo "Stale: this run is about a commit that is no longer the head. Nothing to do."
+            echo "number=" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
           echo "number=$NUM" >> "$GITHUB_OUTPUT"
           if [ "${{ github.event.workflow_run.conclusion }}" = "success" ]; then
             echo "green=true" >> "$GITHUB_OUTPUT"
@@ -124,9 +153,11 @@ jobs:
           GH_TOKEN: ${{ steps.token.outputs.token }}
           PR: ${{ steps.pr.outputs.number }}
           REPO: ${{ github.repository }}
+          SHA: ${{ github.event.workflow_run.head_sha }}
         run: |
           M=$(gh pr view "$PR" --repo "$REPO" --json mergeable -q '.mergeable')
-          if [ "$M" = "CONFLICTING" ]; then
+          # Checked again right before acting (`0020`).
+          if [ "$M" = "CONFLICTING" ] && [ "$(bash scripts/still-current.sh "$PR" "$SHA")" = "current=true" ]; then
             gh pr comment "$PR" --repo "$REPO" \
               --body "Conflicts with develop. Back to the implementer before review (ADR 0009)."
             gh pr edit "$PR" --repo "$REPO" --add-label needs:rework
@@ -141,7 +172,14 @@ jobs:
           GH_TOKEN: ${{ steps.token.outputs.token }}
           PR: ${{ steps.pr.outputs.number }}
           REPO: ${{ github.repository }}
+          SHA: ${{ github.event.workflow_run.head_sha }}
         run: |
+          # Checked again right before acting (`0020`): red CI on an old commit
+          # says nothing about the new one.
+          if [ "$(bash scripts/still-current.sh "$PR" "$SHA")" != "current=true" ]; then
+            echo "Stale: a newer commit has its own CI run. Nothing to do."
+            exit 0
+          fi
           gh pr comment "$PR" --repo "$REPO" \
             --body "CI is red. Back to the implementer without review (ADR 0004)."
           gh pr edit "$PR" --repo "$REPO" --add-label needs:rework
@@ -165,8 +203,8 @@ jobs:
           PR: ${{ steps.pr.outputs.number }}
           REPO: ${{ github.repository }}
           REVIEWER: ${{ steps.token.outputs.app-slug }}[bot]
+          HEAD: ${{ github.event.workflow_run.head_sha }}
         run: |
-          HEAD=$(gh pr view "$PR" --repo "$REPO" --json headRefOid --jq .headRefOid)
           R=$(gh api "repos/$REPO/pulls/$PR/reviews" \
                 --jq "[.[] | select(.state != \"PENDING\")
                            | select(.user.login == \"$REVIEWER\")] | last // empty")
@@ -238,31 +276,28 @@ jobs:
           permission-pull-requests: write
           permission-contents: read
 
-      # Role instructions, shared Pi config and AGENTS.md — never the source code.
-      #
-      # `AGENTS.md` is checked out because `reviewer.md` step 5 tells this role
-      # to read it: "the repository's own conventions and its accumulated
-      # corrections. A finding recorded there has already been made once." It was
-      # not in this list, so the reviewer was told to read a file it did not
-      # have, found nothing, and said nothing about finding nothing
-      # (`NOTES.md` 41). The gatekeeper has the same instruction and had the same
-      # hole.
-      #
-      # None of it is source. `0004` forbids this role a worktree of the change
-      # under review, and a sparse checkout of these four paths keeps that
-      # intact. Everything here comes from the DEFAULT BRANCH, which in a
-      # workflow_run job is the property we want: a pull request cannot rewrite
-      # the instructions, the conventions or the tooling that judge it.
+      # `0021`: the reviewer reads the commit it judges. A fresh checkout of
+      # exactly the commit CI passed (`0020`), never "the branch now". `0004`'s
+      # failure was a stale LOCAL copy the agent had worked in; this is the
+      # pushed commit, which is the remote. The reviewer runs in this folder and
+      # can search the whole repository.
       - uses: actions/checkout@v5
         with:
-          # Instructions and tools from develop (`0019`), not the default branch
-          # a workflow_run job would otherwise check out.
+          ref: ${{ needs.triage.outputs.sha }}
+          path: code
+          persist-credentials: false
+
+      # Instructions, tools and Pi config from develop (`0019`), in their own
+      # folder. Pi loads nothing from the pull request's .pi/ (see the run step).
+      - uses: actions/checkout@v5
+        with:
           ref: develop
+          path: pipeline
           sparse-checkout: |
             .agents
             .pi
-            AGENTS.md
             scripts/pi-driver.py
+            scripts/still-current.sh
           sparse-checkout-cone-mode: false
 
       - uses: actions/setup-node@v7
@@ -279,6 +314,8 @@ jobs:
       #   .pi/. Until 2026-09-18 no role's sampling or routing reached the wire
       #   (`NOTES.md` 72). And a model missing from Pi's catalogue silently runs
       #   as a copy of another model, with none of its settings.
+      # - settings.json goes there too: the run passes --no-approve, so the pull
+      #   request's project settings are never read (`NOTES.md` 82).
       - name: Install Pi, its search tools and its model config
         env:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
@@ -290,7 +327,8 @@ jobs:
           command -v rg > /dev/null && command -v fdfind > /dev/null \
             || { echo "::error::ripgrep or fd is missing, so Pi's grep and find tools would fail"; exit 1; }
           mkdir -p ~/.pi/agent
-          cp .pi/models.json ~/.pi/agent/models.json
+          cp pipeline/.pi/models.json ~/.pi/agent/models.json
+          cp pipeline/.pi/settings.json ~/.pi/agent/settings.json
           pi --list-models openrouter < /dev/null > "$RUNNER_TEMP/models.txt" 2>&1 || true
           grep -qF -- "$MODEL" "$RUNNER_TEMP/models.txt" \
             || { echo "::error::Pi does not know $MODEL. It would run as a copy of another model, with none of its settings (NOTES.md 72). Declare it under models in .pi/models.json."; exit 1; }
@@ -298,118 +336,85 @@ jobs:
 
       # WHEN IS A REVIEW FINISHED?
       #
-      # Not "a review exists" — on a rework round one already does, left by the
-      # previous round, so that check is green before this run starts and gates
-      # nothing (`NOTES.md` 27 is the same trap on the implementer). The review
-      # has to be about the commit under review.
+      # When the reviewer App has a review on THIS run's commit (`0012`: the
+      # verdict is a review, and GitHub records its `commit_id`). "A review
+      # exists" would be true before the run on any rework round
+      # (`NOTES.md` 27), and "about the head now" could be a different commit.
       #
-      # Since `0012` that is an equality test on `commit_id`, which GitHub
-      # records on the review itself. The reviewer no longer has to state the
-      # SHA, and this no longer depends on it having remembered to.
+      # Or when that commit is no longer the head (`0020`): the review was
+      # rightly not posted, and the newer commit gets its own.
       - name: Define what a finished review means
         env:
           GH_TOKEN: ${{ steps.token.outputs.token }}
           PR: ${{ needs.triage.outputs.number }}
           REPO: ${{ github.repository }}
+          SHA: ${{ needs.triage.outputs.sha }}
+          REVIEWER: ${{ needs.triage.outputs.reviewer }}
+          STILL: ${{ github.workspace }}/pipeline/scripts/still-current.sh
         run: |
-          cat > "$RUNNER_TEMP/review-done.sh" <<'DONE'
+          cat > "$RUNNER_TEMP/review-done.sh" <<DONE
           set -u
-          HEAD=$(gh pr view "$PR" --repo "$REPO" --json headRefOid --jq '.headRefOid')
-          # `0012`: the verdict IS the review. Its `commit_id` is the commit it
-          # was submitted against — recorded by GitHub, not written by a model,
-          # so this is an equality test rather than a prefix match over prose.
-          R=$(gh api "repos/$REPO/pulls/$PR/reviews" \
-                --jq '[.[] | select(.state != "PENDING")] | last // empty')
-
-          if [ -z "$R" ]; then
-            echo "Pull request #$PR carries no review."
-            echo "The commit under review is $HEAD."
+          if [ "\$(REPO="$REPO" bash "$STILL" "$PR" "$SHA")" = "current=false" ]; then
+            echo "Stale: ${SHA:0:7} is no longer the head of #$PR, so there is nothing to post."
+            exit 0
+          fi
+          AT=\$(gh api "repos/$REPO/pulls/$PR/reviews" \
+                 --jq '[.[] | select(.state != "PENDING") | select(.user.login == "$REVIEWER")] | last | .commit_id // ""')
+          if [ "\$AT" != "$SHA" ]; then
+            echo "No review from $REVIEWER on ${SHA:0:7} yet (its latest is on \${AT:0:7})."
             exit 1
           fi
-          AT=$(jq -r '.commit_id' <<< "$R")
-          STATE=$(jq -r '.state' <<< "$R")
-          if [ "$AT" != "$HEAD" ]; then
-            echo "The latest review on #$PR is not about the commit under review."
-            echo "  commit under review: $HEAD"
-            echo "  latest review:       $STATE, submitted against $AT"
-            exit 1
-          fi
-          echo "A $STATE review against $HEAD is posted."
+          echo "A review of ${SHA:0:7} is posted."
           DONE
           chmod +x "$RUNNER_TEMP/review-done.sh"
 
       - name: Review the pull request
+        working-directory: code
         env:
           GH_TOKEN: ${{ steps.token.outputs.token }}
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           PR: ${{ needs.triage.outputs.number }}
           REPO: ${{ github.repository }}
+          SHA: ${{ needs.triage.outputs.sha }}
+          P: ${{ github.workspace }}/pipeline
           # Read by .pi/extensions/submit.ts: which submit tool to register,
-          # and which pull request it posts the verdict to. The tool reads the
-          # head SHA itself, so the role never states it (`0009` guard 2).
+          # which pull request it posts to, the commit the review is about
+          # (`0020`), and the one staleness check it runs before posting.
+          # PI_HEAD_SHA also turns on the quote check (`0021`).
           PI_ROLE: reviewer
           PI_PR: ${{ needs.triage.outputs.number }}
           PI_REPO: ${{ github.repository }}
+          PI_HEAD_SHA: ${{ needs.triage.outputs.sha }}
+          PI_STILL_CURRENT: ${{ github.workspace }}/pipeline/scripts/still-current.sh
           PI_OFFLINE: "1"
         run: |
-          # No checkout above, for two independent reasons.
-          #
-          # ADR 0004: on the Hermes run the reviewer read its own worktree and
-          # approved code that was not on the remote — the board, the worktree
-          # and the agent's own account all agreed while being wrong.
-          #
-          # And mechanically: in a workflow_run job, GITHUB_SHA and GITHUB_REF
-          # point at the DEFAULT BRANCH, not the triggering run, so a bare
-          # actions/checkout would fetch the wrong code (NOTES.md section 7).
-          #
-          # --tools is an allowlist, not the --exclude-tools denylist this used
-          # to be. The difference is what happens when Pi gains a tool: a
-          # denylist silently grants it, an allowlist silently withholds it, and
-          # of the two only the second fails safe.
-          #
-          # Note plainly what it is worth: the role still holds `bash`, which
-          # writes files, and needs it to run `gh` at all. This is hygiene, not
-          # a control. The control is that this App has no merge rights.
-          # Refuse to run an agent with no role instructions. `--skill` used to
-          # fail silently here and two runs went out with none (`NOTES.md` 25).
-          test -s .agents/reviewer.md \
-            || { echo "::error::.agents/reviewer.md is missing or empty"; exit 1; }
-          test -s .agents/nudge-reviewer.md \
-            || { echo "::error::.agents/nudge-reviewer.md is missing or empty"; exit 1; }
-          test -x scripts/pi-driver.py \
-            || { echo "::error::scripts/pi-driver.py missing from the sparse checkout"; exit 1; }
-          # `.pi/extensions/` is auto-discovered, so a missing file is silent:
-          # the run would proceed with no submit_review tool at all and the role
-          # would have no way to post anything.
-          test -s .pi/extensions/submit.ts \
-            || { echo "::error::.pi/extensions/submit.ts missing — the role has no way to post a verdict"; exit 1; }
-          test -s .pi/extensions/protect.ts \
-            || { echo "::error::.pi/extensions/protect.ts missing — the root of trust is unguarded in-loop"; exit 1; }
-          test -s .pi/extensions/sanity.ts \
-            || { echo "::error::.pi/extensions/sanity.ts missing — corrupted tool arguments would go unnoticed"; exit 1; }
-          test -s .pi/extensions/permission-gate.ts \
-            || { echo "::error::.pi/extensions/permission-gate.ts missing — dangerous shell commands would run unchecked"; exit 1; }
-          test -s .pi/extensions/debug.ts \
-            || { echo "::error::.pi/extensions/debug.ts missing"; exit 1; }
-          test -s AGENTS.md \
-            || { echo "::error::AGENTS.md is not in the checkout — this role is told to read it"; exit 1; }
-          echo "role instructions: $(wc -c < .agents/reviewer.md) bytes"
+          # Refuse to run an agent with no role instructions, and refuse to run
+          # without any extension: they are loaded one by one with -e below, and
+          # a missing file would otherwise be a missing guard (`NOTES.md` 25, 81).
+          for f in .agents/reviewer.md .agents/nudge-reviewer.md scripts/pi-driver.py \
+                   .pi/extensions/submit.ts .pi/extensions/protect.ts .pi/extensions/sanity.ts \
+                   .pi/extensions/permission-gate.ts .pi/extensions/debug.ts; do
+            test -s "$P/$f" || { echo "::error::$f missing from develop"; exit 1; }
+          done
+          test "$(git rev-parse HEAD)" = "$SHA" \
+            || { echo "::error::the checkout is not the commit under review"; exit 1; }
+          echo "role instructions: $(wc -c < "$P/.agents/reviewer.md") bytes, reviewing ${SHA:0:7}"
 
-          # On a first review the comments and reviews endpoints are both empty,
-          # and the role file lists both as things to read — so it spends two
-          # turns and ~15k input tokens learning that a pull request opened
-          # minutes ago has no conversation.
-          # We know which case it is. Say so.
-          NCOMMENTS=$(gh api "repos/$REPO/issues/$PR/comments" --jq 'length' 2>/dev/null || echo 0)
-          NREVIEWS=$(gh api "repos/$REPO/pulls/$PR/reviews" --jq 'length' 2>/dev/null || echo 0)
-          if [ "$NCOMMENTS" = "0" ] && [ "$NREVIEWS" = "0" ]; then
-            HISTORY="This is the FIRST review of this pull request. It carries no comments and
-          no previous reviews — both are empty, so do not spend turns fetching them.
-          The plan in the body and the diff are all there is to read."
+          # `0021`: the reviewer judges the code as it is, not its own earlier
+          # reviews. On round 2 of #96 it repeated its previous review word for
+          # word about a line already removed (`NOTES.md` 83). What a PERSON
+          # wrote is given here in full, so it has no reason to go reading the
+          # review history; a finding that still matters is found again in
+          # the code.
+          PEOPLE=$( { gh api "repos/$REPO/issues/$PR/comments" --paginate \
+                        --jq '.[] | select(.user.type != "Bot") | "- " + .user.login + ": " + .body' ;
+                      gh api "repos/$REPO/pulls/$PR/reviews" --paginate \
+                        --jq '.[] | select(.user.type != "Bot") | select(.body != "") | "- " + .user.login + " (review, " + .state + "): " + .body' ; } 2>/dev/null || true)
+          if [ -n "$PEOPLE" ]; then
+            PEOPLE="What people have written on this pull request. It outranks anything an agent wrote:
+          $PEOPLE"
           else
-            HISTORY="This pull request already carries $NCOMMENTS comment(s) and $NREVIEWS review(s).
-          Read them: anything a person wrote outranks anything an agent wrote, and a
-          previous verdict of your own may be among them."
+            PEOPLE="No person has written on this pull request."
           fi
 
           # Line threads a PERSON resolved are settled (`NOTES.md` 79): the
@@ -430,36 +435,47 @@ jobs:
           $SETTLED"
           fi
 
+          # A prompt carries what the role file cannot know (`NOTES.md` 57): the
+          # commit, that it is checked out here, and what people said.
           cat > "$RUNNER_TEMP/prompt.md" <<PROMPT
-          Review pull request #$PR in $REPO.
+          Review pull request #$PR in $REPO, at commit $SHA.
 
-          $HISTORY
+          That commit is checked out in your working directory: the whole
+          repository as it is at that commit, not only the diff. Read it, search
+          it, and compare the change with how the rest of the code does things.
+          Judge the code as it is now. Do not read your own earlier reviews of
+          this pull request: a finding that still matters, you will find again
+          in the code.
+
+          $PEOPLE
 
           $SETTLED
           PROMPT
 
-          # The driver, for the same reason the other two roles have one: `pi`
-          # exits 0 when the task fails (`NOTES.md` 1), so a provider 429 or a
-          # model that thinks and says nothing used to leave this step green and
-          # the pull request silently unreviewed. The gatekeeper would then read
-          # an absent verdict as `unsure` and escalate — the right outcome by
-          # accident, arrived at without anyone knowing the review never ran.
-          # --no-skills: the human skills in .agents/skills/ (`0015`) are for people's
-          # harnesses. Pi discovers that directory by itself, and without the flag
-          # every role would carry them in its system prompt on every run.
-          # --provider openrouter: `--model` reads `provider/id`, so a model whose
-          # prefix is also a Pi provider (`deepseek/`, `google/`, `openai/`) goes to
-          # that provider instead, and dies asking for its key (`NOTES.md` 70).
-          python3 scripts/pi-driver.py \
+          # The driver, for the same reason every role has one: `pi` exits 0
+          # when the task fails (`NOTES.md` 1).
+          # --no-approve --no-extensions -e: the working directory is the pull
+          # request's code, so its .pi/ must never load. The extensions come from
+          # develop, one by one (`NOTES.md` 82).
+          # --no-skills: the human skills in .agents/skills/ (`0015`) are for
+          # people's harnesses.
+          # --provider openrouter: `--model` reads `provider/id` (`NOTES.md` 70).
+          # --tools is an allowlist: a denylist silently grants a tool Pi gains.
+          # This is hygiene, not a control; the control is that this App has no
+          # merge rights.
+          python3 "$P/scripts/pi-driver.py" \
             --prompt-file "$RUNNER_TEMP/prompt.md" \
-            --nudge-file .agents/nudge-reviewer.md \
+            --nudge-file "$P/.agents/nudge-reviewer.md" \
             --done "bash $RUNNER_TEMP/review-done.sh" \
             --max-nudges 2 \
             --idle-timeout 600 \
             --timeout 1500 \
             --log "$RUNNER_TEMP/rpc.jsonl" \
-            -- pi --mode rpc --approve --no-skills --provider openrouter \
-                  --append-system-prompt "$(cat .agents/reviewer.md)" \
+            -- pi --mode rpc --no-approve --no-extensions --no-skills --provider openrouter \
+                  -e "$P/.pi/extensions/submit.ts" -e "$P/.pi/extensions/protect.ts" \
+                  -e "$P/.pi/extensions/sanity.ts" -e "$P/.pi/extensions/permission-gate.ts" \
+                  -e "$P/.pi/extensions/debug.ts" \
+                  --append-system-prompt "$(cat "$P/.agents/reviewer.md")" \
                   --model "${{ vars.REVIEW_MODEL }}" \
                   --tools read,grep,find,ls,bash,submit_review
 
@@ -499,6 +515,22 @@ jobs:
           client-id: ${{ vars.GATEKEEPER_CLIENT_ID }}
           private-key: ${{ secrets.GATEKEEPER_APP_PRIVATE_KEY }}
 
+      # Role instructions, shared Pi config, AGENTS.md and the scripts, from
+      # develop (`0019`), never the code under review: a pull request cannot
+      # rewrite what judges it. AGENTS.md because the role file tells it to
+      # read the conventions (`NOTES.md` 41). At the start, not only on the merge
+      # path, because the staleness check (`0020`) is needed before anything.
+      - uses: actions/checkout@v5
+        with:
+          ref: develop
+          sparse-checkout: |
+            .agents
+            .pi
+            AGENTS.md
+            scripts/pi-driver.py
+            scripts/still-current.sh
+          sparse-checkout-cone-mode: false
+
       # ADR 0006 allows no third ending. This says what the endings ARE, once,
       # and two things read it: the driver that will not let the agent stop
       # without one, and the safety net that fires if it stopped anyway.
@@ -520,6 +552,12 @@ jobs:
         run: |
           cat > "$RUNNER_TEMP/gatekeeper-done.sh" <<'DONE'
           set -u
+          # `0020`: a run about a commit that is no longer the head has nothing
+          # to decide, and ending there is correct. Needs SHA and STILL.
+          if [ "$(bash "$STILL" "$PR" "$SHA")" = "current=false" ]; then
+            echo "Stale: ${SHA:0:7} is no longer the head of #$PR. Its successor has its own chain."
+            exit 0
+          fi
           OWNER=${REPO%%/*}; NAME=${REPO##*/}
           J=$(gh pr view "$PR" --repo "$REPO" --json state,labels,autoMergeRequest)
           STATE=$(jq -r '.state' <<< "$J")
@@ -568,7 +606,16 @@ jobs:
           PR: ${{ needs.triage.outputs.number }}
           REPO: ${{ github.repository }}
           REVIEWER: ${{ needs.triage.outputs.reviewer }}
+          SHA: ${{ needs.triage.outputs.sha }}
         run: |
+          # `0020`: this run is about $SHA. If the pull request has moved on,
+          # the newer commit's chain decides and this one stops quietly.
+          if [ "$(bash scripts/still-current.sh "$PR" "$SHA")" != "current=true" ]; then
+            echo "Stale: nothing to route."
+            echo "go=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
           # One read, reused below. Every `gh pr view` is a round trip.
           PRJSON=$(gh pr view "$PR" --repo "$REPO" --json labels,headRefOid)
           HEAD=$(jq -r '.headRefOid' <<< "$PRJSON")
@@ -597,6 +644,13 @@ jobs:
           # is valid JSON and `.state // ""` on it gives the empty string.
           RJ=${R:-null}
           AT=$(jq -r '.commit_id // ""' <<< "$RJ")
+          # `0020`: only a verdict about this run's commit counts. A review of
+          # an older commit (the review job failed, or never ran) is not this
+          # commit's verdict, and acting on it would send current work back over
+          # an old finding. With no verdict the route is `unsure`: a person.
+          if [ "$AT" != "$SHA" ]; then
+            R=""; RJ=null
+          fi
           case "$(jq -r '.state // ""' <<< "$RJ")" in
             APPROVED)          V=merge ;;
             CHANGES_REQUESTED) V=rework ;;
@@ -766,41 +820,18 @@ jobs:
           PR: ${{ needs.triage.outputs.number }}
           REPO: ${{ github.repository }}
           REASONS: ${{ needs.triage.outputs.reasons }}
+          SHA: ${{ needs.triage.outputs.sha }}
         run: |
+          if [ "$(bash scripts/still-current.sh "$PR" "$SHA")" != "current=true" ]; then
+            echo "Stale: a newer commit has its own chain (0020)."
+            exit 0
+          fi
           gh pr edit "$PR" --repo "$REPO" --add-label needs:human
           gh pr ready "$PR" --repo "$REPO"
           printf '%s\n\n%s\n' \
             "Escalated without review — this diff carries authority an agent may not self-approve (ADR 0006)." \
             "$REASONS" > "$RUNNER_TEMP/body.md"
           gh pr comment "$PR" --repo "$REPO" --body-file "$RUNNER_TEMP/body.md"
-
-      # Role instructions, shared Pi config and AGENTS.md — never the source code.
-      #
-      # `AGENTS.md` is checked out because `reviewer.md` step 5 tells this role
-      # to read it: "the repository's own conventions and its accumulated
-      # corrections. A finding recorded there has already been made once." It was
-      # not in this list, so the reviewer was told to read a file it did not
-      # have, found nothing, and said nothing about finding nothing
-      # (`NOTES.md` 41). The gatekeeper has the same instruction and had the same
-      # hole.
-      #
-      # None of it is source. `0004` forbids this role a worktree of the change
-      # under review, and a sparse checkout of these four paths keeps that
-      # intact. Everything here comes from the DEFAULT BRANCH, which in a
-      # workflow_run job is the property we want: a pull request cannot rewrite
-      # the instructions, the conventions or the tooling that judge it.
-      - uses: actions/checkout@v5
-        if: steps.verdict.outputs.go == 'true'
-        with:
-          # Instructions and tools from develop (`0019`), not the default branch
-          # a workflow_run job would otherwise check out.
-          ref: develop
-          sparse-checkout: |
-            .agents
-            .pi
-            AGENTS.md
-            scripts/pi-driver.py
-          sparse-checkout-cone-mode: false
 
       - uses: actions/setup-node@v7
         if: steps.verdict.outputs.go == 'true'
@@ -844,6 +875,8 @@ jobs:
           REPO: ${{ github.repository }}
           REVIEWED: ${{ steps.verdict.outputs.reviewed }}
           VERDICT: ${{ steps.verdict.outputs.verdict }}
+          SHA: ${{ needs.triage.outputs.sha }}
+          STILL: ${{ github.workspace }}/scripts/still-current.sh
           # This role registers no submit tool, and says so on stderr. Its
           # finish is a merge or an escalation — both `gh` calls the driver's
           # --done check can see directly.
@@ -942,6 +975,8 @@ jobs:
           PR: ${{ needs.triage.outputs.number }}
           REPO: ${{ github.repository }}
           RUN: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          SHA: ${{ needs.triage.outputs.sha }}
+          STILL: ${{ github.workspace }}/scripts/still-current.sh
         run: |
           # The same predicate the driver used. One definition of "has an
           # outcome", and it counts a queued merge as one — see the step that

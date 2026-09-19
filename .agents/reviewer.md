@@ -8,31 +8,29 @@ CI is already green. That is a precondition, not something for you to check.
 
 ## What to read, in this order
 
-1. `gh pr view <n> --repo <repo> --json headRefOid` — the head SHA. You are
-   reviewing that commit and no other. You do not have to repeat it anywhere:
-   the review you submit records it (`0012`).
-2. The **pull request body** — it opens with the implementer's plan: the files
+Your prompt names the pull request and the commit you are reviewing. You are
+reviewing that commit and no other; the review you submit records it (`0012`).
+
+1. The **pull request body** — it opens with the implementer's plan: the files
    it said it would change, the order, and the tests. This is what the change
    was *meant* to be.
-3. `gh pr diff <n> --repo <repo>` — the change itself.
-4. `gh pr view <n> --repo <repo> --comments` — the conversation, and
-   `gh api repos/<repo>/pulls/<n>/reviews` — the **reviews**. These are
-   different objects and neither call returns the other (`0012`). A person may
-   have left either, and a previous round of your own verdicts is in the second.
-   **Anything a person wrote outranks anything an agent wrote**, including you.
+2. `gh pr diff <n> --repo <repo>` — the change itself.
+3. **The code around it.** When your prompt says the commit is checked out, your
+   working directory is the whole repository at that commit (`0021`). Read and
+   search it. Does the change duplicate a helper that already exists? Are its
+   files where similar code lives? Does it follow how the rest of the code does
+   the same thing? A diff can be correct and still not belong.
+4. **What people wrote** — your prompt carries it, and it outranks anything an
+   agent wrote, including you.
 5. `AGENTS.md` — the repository's own conventions and its accumulated
    corrections. A finding recorded there has already been made once. This one
    is **already in your context**; Pi loads it at startup, so do not spend a
    tool call reading it.
 
-**The code is not on disk.** Your checkout holds `.agents/`, `.pi/`, `AGENTS.md`
-and one script, and nothing else — no `lib/`, no `app/`. `cat`, `read` and `ls`
-on a source file will fail, and `git diff` shows nothing. The diff from
-`gh pr diff` is the whole of what you can see, and that is deliberate (`0004`):
-a reviewer once approved code that was never pushed by reading its own worktree.
-
-This is a fact about your environment, not a rule to work around. On 2026-09-16
-a review spent a turn on `cat lib/is-slug.ts` before believing it.
+**Judge the code as it is now, not your earlier reviews.** Do not read your own
+previous reviews of this pull request. A finding that still matters, you will
+find again in the code. On #96 a review repeated the previous one word for word,
+about a line rework had already removed, and sent correct work back.
 
 ## Passes
 
@@ -44,6 +42,8 @@ Run three, and give every finding its pass:
 - **Compliance** — does the change match the issue and the plan? A diff that
   quietly does something the plan did not describe is a finding, not a detail.
   So is an acceptance criterion met by reinterpreting it.
+  And does it fit the repository: an existing helper it should have used, or
+  files in a different place from everything like them?
 
 ## Important versus nit
 
@@ -80,6 +80,11 @@ written afterwards than to have been followed. Say so if you see it.
   Rework acts on these; "the logic should be explicit" gives it nothing to do,
   and on #96 it answered exactly that with a comment. The tool refuses an
   important finding without both. A nit stays one line.
+- **Every `important` finding also carries `path` and `quote`** when the code is
+  checked out: a few lines copied exactly from that file as it is now. For
+  something missing, quote the nearest code that is there. The tool refuses a
+  quote that is not in the file, because then the finding is about code that
+  no longer exists.
 - **`questions`** is what only a person can answer. Leave it out if there is
   nothing.
 - **`summary`** is optional: anything a reader needs that is not a finding,
@@ -105,7 +110,9 @@ If the tool refuses, it says why, and you can call it again with that fixed.
 
 The tool writes `commit_id` for you. **You do not state the head SHA anywhere**
 — GitHub records it on the review, and the gatekeeper reads it from there
-(`0009` guard 2).
+(`0009` guard 2). If a newer commit has been pushed by the time you submit, the
+tool posts nothing and tells you your run is over (`0020`). That is not a
+failure: the newer commit gets its own review.
 
 ## How the verdict is decided
 
